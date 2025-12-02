@@ -17,6 +17,28 @@ from xrobotoolkit_teleop.common.xr_client import XrClient
 app = Flask(__name__)
 xr_client: XrClient = None
 
+def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
+    """
+    Convert a quaternion [qx, qy, qz, qw] to Euler angles [roll, pitch, yaw] in radians.
+    """
+    x, y, z, w = q
+    # roll (x-axis rotation)
+    t0 = +2.0 * (w * x + y * z)
+    t1 = +1.0 - 2.0 * (x * x + y * y)
+    roll_x = np.arctan2(t0, t1)
+
+    # pitch (y-axis rotation)
+    t2 = +2.0 * (w * y - z * x)
+    t2 = np.clip(t2, -1.0, 1.0)
+    pitch_y = np.arcsin(t2)
+
+    # yaw (z-axis rotation)
+    t3 = +2.0 * (w * z + x * y)
+    t4 = +1.0 - 2.0 * (y * y + z * z)
+    yaw_z = np.arctan2(t3, t4)
+
+    return np.array([roll_x, pitch_y, yaw_z])
+
 def get_xr_data() -> Dict[str, Any]:
     """
     Fetches all relevant XR data from the XrClient and formats it for the API.
@@ -31,7 +53,8 @@ def get_xr_data() -> Dict[str, Any]:
     if head_pose is not None:
         data['head'] = {
             "pos": head_pose[:3].tolist(),
-            "rot": head_pose[3:].tolist() # qx,qy,qz,qw
+            "rot": head_pose[3:].tolist(), # qx,qy,qz,qw
+            "euler": quaternion_to_euler(head_pose[3:]).tolist()
         }
     else:
         data['head'] = None
@@ -58,6 +81,7 @@ def get_xr_data() -> Dict[str, Any]:
     data['left'] = {
         "pos": left_pose[:3].tolist() if left_pose is not None else None,
         "rot": left_pose[3:].tolist() if left_pose is not None else None,
+        "euler": quaternion_to_euler(left_pose[3:]).tolist() if left_pose is not None else None,
         "trigger": left_trigger,
         "grip": left_grip,
         "joystick": left_joystick,
@@ -79,6 +103,7 @@ def get_xr_data() -> Dict[str, Any]:
     data['right'] = {
         "pos": right_pose[:3].tolist() if right_pose is not None else None,
         "rot": right_pose[3:].tolist() if right_pose is not None else None,
+        "euler": quaternion_to_euler(right_pose[3:]).tolist() if right_pose is not None else None,
         "trigger": right_trigger,
         "grip": right_grip,
         "joystick": right_joystick,
@@ -90,11 +115,6 @@ def get_xr_data() -> Dict[str, Any]:
         }
     }
     
-    # Optional: Add hand tracking if available and requested
-    # For now, we'll stick to controller data as "hands" for simplicity,
-    # as per the JSON structure preview focusing on controller-like data.
-    # If explicit hand tracking is needed, this section can be expanded.
-
     return data
 
 @app.route('/data', methods=['GET'])
@@ -109,6 +129,79 @@ def get_all_xr_data():
         app.logger.error(f"Error fetching XR data: {e}")
         return jsonify({"error": str(e)}), 500
 
+@app.route('/head', methods=['GET'])
+def get_head_pose_euler():
+    pose = xr_client.get_pose_by_name("headset")
+    if pose is not None:
+        return jsonify({
+            "pos": pose[:3].tolist(),
+            "euler": quaternion_to_euler(pose[3:]).tolist()
+        })
+    return jsonify(None), 404
+
+@app.route('/headPosition', methods=['GET'])
+def get_head_position():
+    pose = xr_client.get_pose_by_name("headset")
+    if pose is not None:
+        return jsonify(pose[:3].tolist())
+    return jsonify(None), 404
+
+@app.route('/headRotation', methods=['GET'])
+def get_head_rotation():
+    pose = xr_client.get_pose_by_name("headset")
+    if pose is not None:
+        return jsonify(quaternion_to_euler(pose[3:]).tolist())
+    return jsonify(None), 404
+
+@app.route('/left', methods=['GET'])
+def get_left_pose_euler():
+    pose = xr_client.get_pose_by_name("left_controller")
+    if pose is not None:
+        return jsonify({
+            "pos": pose[:3].tolist(),
+            "euler": quaternion_to_euler(pose[3:]).tolist()
+        })
+    return jsonify(None), 404
+
+@app.route('/leftPosition', methods=['GET'])
+def get_left_position():
+    pose = xr_client.get_pose_by_name("left_controller")
+    if pose is not None:
+        return jsonify(pose[:3].tolist())
+    return jsonify(None), 404
+
+@app.route('/leftRotation', methods=['GET'])
+def get_left_rotation():
+    pose = xr_client.get_pose_by_name("left_controller")
+    if pose is not None:
+        return jsonify(quaternion_to_euler(pose[3:]).tolist())
+    return jsonify(None), 404
+
+@app.route('/right', methods=['GET'])
+def get_right_pose_euler():
+    pose = xr_client.get_pose_by_name("right_controller")
+    if pose is not None:
+        return jsonify({
+            "pos": pose[:3].tolist(),
+            "euler": quaternion_to_euler(pose[3:]).tolist()
+        })
+    return jsonify(None), 404
+
+@app.route('/rightPosition', methods=['GET'])
+def get_right_position():
+    pose = xr_client.get_pose_by_name("right_controller")
+    if pose is not None:
+        return jsonify(pose[:3].tolist())
+    return jsonify(None), 404
+
+@app.route('/rightRotation', methods=['GET'])
+def get_right_rotation():
+    pose = xr_client.get_pose_by_name("right_controller")
+    if pose is not None:
+        return jsonify(quaternion_to_euler(pose[3:]).tolist())
+    return jsonify(None), 404
+
+
 @app.before_request
 def initialize_xr_client():
     """Initialize XrClient before the first request if not already initialized."""
@@ -120,9 +213,6 @@ def initialize_xr_client():
             print("XrClient initialized.")
         except Exception as e:
             app.logger.error(f"Failed to initialize XrClient: {e}")
-            # Depending on desired behavior, could exit or return an error response
-            # For now, let's allow the app to start but subsequent requests will fail
-            # if xr_client remains None or throws an error during data fetching.
 
 @app.teardown_appcontext
 def close_xr_client(exception=None):
