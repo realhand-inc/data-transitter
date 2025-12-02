@@ -4,6 +4,7 @@ import time
 from typing import Dict, Any
 import numpy as np
 from flask import Flask, jsonify
+import math
 
 # Ensure xrobotoolkit_teleop is in the Python path
 # This assumes the script is run from the project root or from scripts/misc
@@ -16,6 +17,7 @@ from xrobotoolkit_teleop.common.xr_client import XrClient
 
 app = Flask(__name__)
 xr_client: XrClient = None
+start_time: float = 0.0 # Global variable for start time
 
 def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     """
@@ -148,10 +150,15 @@ def get_head_position():
 
 @app.route('/headRotation', methods=['GET'])
 def get_head_rotation():
-    pose = xr_client.get_pose_by_name("headset")
-    if pose is not None:
-        return jsonify(quaternion_to_euler(pose[3:]).tolist())
-    return jsonify(None), 404
+    global start_time
+    # Calculate elapsed time
+    elapsed = time.time() - start_time
+
+    # Generate sine and cosine waves
+    sin_wave = math.sin(elapsed) * 180
+    cos_wave = math.cos(elapsed) * 180
+    
+    return jsonify([sin_wave, cos_wave, sin_wave * cos_wave])
 
 @app.route('/left', methods=['GET'])
 def get_left_pose_euler():
@@ -229,10 +236,12 @@ def close_xr_client(exception=None):
 
 if __name__ == '__main__':
     # Initialise XrClient here for when running directly
+    global start_time
     try:
         print("Starting XR Data Server...")
         xr_client = XrClient()
         print("XrClient initialized for main process.")
+        start_time = time.time() # Initialize start_time here
     except Exception as e:
         print(f"ERROR: Failed to initialize XrClient before starting app: {e}")
         print("Please ensure XRoboToolkit PC Service is running and XR device is connected.")
