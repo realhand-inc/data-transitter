@@ -86,7 +86,41 @@ conda activate xr-robotics
 source venv/bin/activate
 ```
 
-### Available Demos
+### Main Demo: Head Rotation Sender
+
+This script is the primary demo for transmitting head rotation data from an XR headset to a remote Linux machine via ZMQ. It captures the headset's orientation, converts it to Euler angles, applies mapping and clamping, and sends the data.
+
+**Features:**
+-   Captures headset pose using `XrClient`.
+-   Converts Quaternion to Euler angles (Roll, Pitch, Yaw).
+-   Maps coordinate systems:
+    -   `x2 = -pitch`
+    -   `y2 = roll`
+    -   `z2 = -yaw`
+-   Clamps angles to safe limits:
+    -   X2: [-90, 90]
+    -   Y2: [-100, 100]
+    -   Z2: [-35, 35]
+-   **Reset Functionality**:
+    -   Press the **'A' button** on the XR controller or the **'r' key** on the keyboard to reset the X2 axis (pitch) offset to the current position.
+-   Sends data in the format: `x2, y2, z2, timestamp`.
+
+**Usage:**
+
+1.  **Configure IP Address:**
+    Open `scripts/RH/test_head_rotation_sender.py` and update the `LINUX_IP` variable to match your receiver's IP address.
+    ```python
+    # Server address
+    LINUX_IP = "192.168.1.56"  # <--- Update this
+    PORT = 5555
+    ```
+
+2.  **Run the script:**
+    ```bash
+    python scripts/RH/test_head_rotation_sender.py
+    ```
+
+### Other Demos
 
 #### 1. MuJoCo Simulation Demos
 
@@ -591,6 +625,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ```bash
 # Activate environment
 source venv/bin/activate          # or: conda activate xr-robotics
+
+# Run Head Rotation Sender (Main Demo)
+python scripts/RH/test_head_rotation_sender.py
 
 # Run MuJoCo demo
 python scripts/simulation/teleop_dual_ur5e_mujoco.py
