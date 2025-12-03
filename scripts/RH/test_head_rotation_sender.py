@@ -4,6 +4,7 @@ import math
 import sys
 import os
 import numpy as np
+from pynput import keyboard
 
 # Ensure xrobotoolkit_teleop is in the Python path
 script_dir = os.path.dirname(__file__)
@@ -25,6 +26,28 @@ socket.connect(f"tcp://{LINUX_IP}:{PORT}")
 
 xr_client: XrClient = None
 last_valid_angles = np.array([0.0, 0.0, 0.0])  # Store last valid rotation data
+x2_offset = 0.0  # Offset for x2 axis reset
+current_x2_raw = 0.0  # Track current raw x2 value before offset
+last_trigger_state = False  # Track trigger state for edge detection
+
+
+def reset_x2():
+    """Reset the x2 axis by storing current raw value as offset and unfreezing output."""
+    global x2_offset, current_x2_raw, last_valid_angles
+    x2_offset = current_x2_raw
+    # Accept current position even if out of range (unfreeze)
+    last_valid_angles = np.array([0.0, last_valid_angles[1], last_valid_angles[2]])
+    print(f"\n[RESET] X2 offset set to {x2_offset:.2f}° (X2 output now: 0.00°)")
+
+
+def on_press(key):
+    """Keyboard callback function for handling reset button."""
+    try:
+        if hasattr(key, 'char') and key.char == 'r':
+            reset_x2()
+    except AttributeError:
+        pass
+
 
 def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     """
@@ -60,7 +83,7 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     Returns:
         numpy array [x2, y2, z2] in degrees with axis remapping and clamping
     """
-    global last_valid_angles
+    global last_valid_angles, x2_offset, current_x2_raw
 
     x1, y1, z1 = euler_rad
 
@@ -71,6 +94,12 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     x2_deg = -y1 * rad_to_deg
     y2_deg = x1 * rad_to_deg
     z2_deg = -z1 * rad_to_deg
+
+    # Store raw x2 value and apply offset
+    current_x2_raw = x2_deg
+    x2_deg = x2_deg - x2_offset
+
+
 
     # x2_deg = 0
     # y2_deg = 0
@@ -93,13 +122,19 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
         return last_valid_angles.copy()
 
 
-print(f"[Mac] Connected to Linux {LINUX_IP}:{PORT}, sending head rotation data...")
+print(f"[PC] Connected to Linux {LINUX_IP}:{PORT}, sending head rotation data...")
 
 try:
     print("Initializing XrClient...")
     xr_client = XrClient()
     print("XrClient initialized.")
     print("\n" + "="*80)
+
+    # Start keyboard listener for reset functionality
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    print("Keyboard listener started. Press 'r' to reset X2 axis.")
+    print("="*80 + "\n")
 
     frame_count = 0
     start_time = time.time()
@@ -124,6 +159,15 @@ try:
         # Send the data
         socket.send_string(data_to_send)
 
+        # Check A button for reset
+        button_pressed = xr_client.get_button_state_by_name("A")
+
+        # Detect rising edge (button just pressed)
+        if button_pressed and not last_trigger_state:
+            reset_x2()
+
+        last_trigger_state = button_pressed
+
         # Calculate frequency
         frame_count += 1
         elapsed_time = time.time() - start_time
@@ -138,13 +182,17 @@ try:
         time.sleep(0.1)
 
 except KeyboardInterrupt:
-    print("\n[Mac] Stopping sender.")
+    print("\n[PC] Stopping sender.")
 except Exception as e:
     print(f"ERROR: An error occurred: {e}")
 finally:
+    # Stop keyboard listener
+    if 'listener' in locals():
+        listener.stop()
+        print("Keyboard listener stopped.")
     if xr_client:
         xr_client.close()
         print("XrClient closed.")
     socket.close()
     context.term()
-    print("[Mac] Socket closed.")
+    print("[PC] Socket closed.")
