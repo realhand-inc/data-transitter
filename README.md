@@ -88,25 +88,11 @@ source venv/bin/activate
 
 ### Available Demos
 
-#### 1. XR Data Display (Debug Tool)
-Display real-time XR device data for debugging and understanding coordinate systems:
-
-```bash
-python scripts/misc/xr_data_display.py
-```
-
-Press `Ctrl+C` to exit.
-
-#### 2. MuJoCo Simulation Demos
+#### 1. MuJoCo Simulation Demos
 
 **Dual UR5e Arms:**
 ```bash
 python scripts/simulation/teleop_dual_ur5e_mujoco.py
-```
-
-**ARX X7S:**
-```bash
-python scripts/simulation/teleop_x7s_placo.py
 ```
 
 **Shadow Hand:**
@@ -114,24 +100,7 @@ python scripts/simulation/teleop_x7s_placo.py
 python scripts/simulation/teleop_shadow_hand_mujoco.py
 ```
 
-**Flexiv Rizon4s:**
-```bash
-python scripts/simulation/teleop_flexiv_rizon4s_mujoco.py
-```
-
-#### 3. Placo Visualization Demos
-
-**ARX X7S:**
-```bash
-python scripts/simulation/teleop_x7s_placo.py
-```
-
-**Inspire Hand:**
-```bash
-python scripts/simulation/teleop_inspire_hand_placo.py
-```
-
-#### 4. Hardware Demos
+#### 2. Hardware Demos
 
 **Dual UR5e with Robotiq Grippers:**
 ```bash
@@ -190,20 +159,6 @@ logs/
     ├── teleop_log_YYYYMMDD_HHMMSS_<session_id>.pkl
     └── teleop_log_YYYYMMDD_HHMMSS_<session_id>.pkl
 ```
-
-#### Validating Collected Data
-
-Use the provided analysis script to verify data integrity and examine collected datasets:
-
-```bash
-python scripts/misc/test_data_log_analysis.py logs/<robot_name>/teleop_log_YYYYMMDD_HHMMSS_1.pkl
-```
-
-This script will:
--   Display available data fields and their types
--   Verify robot states and camera images are properly saved
--   Show sample entries and data statistics
--   Count total logged entries
 
 #### Converting to LeRobot Dataset
 
@@ -608,7 +563,6 @@ pip install "pybind11[global]"
 
 -   **GitHub Issues**: https://github.com/XR-Robotics/XRoboToolkit-Teleop-Sample-Python/issues
 -   **Documentation**: See `teleop_details.md` in the repository for more in-depth technical details.
--   **XR Data Display**: Use `scripts/misc/xr_data_display.py` to debug XR device connections and data
 
 ---
 
@@ -637,9 +591,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ```bash
 # Activate environment
 source venv/bin/activate          # or: conda activate xr-robotics
-
-# Run XR data display
-python scripts/misc/xr_data_display.py
 
 # Run MuJoCo demo
 python scripts/simulation/teleop_dual_ur5e_mujoco.py
