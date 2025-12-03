@@ -24,6 +24,7 @@ socket = context.socket(zmq.PUSH)
 socket.connect(f"tcp://{LINUX_IP}:{PORT}")
 
 xr_client: XrClient = None
+last_valid_angles = np.array([0.0, 0.0, 0.0])  # Store last valid rotation data
 
 def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     """
@@ -51,6 +52,7 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
 def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     """
     Map headset Euler angles to output coordinate system with range protection.
+    If any angle exceeds limits, returns the last valid rotation data instead.
 
     Args:
         euler_rad: numpy array [x1, y1, z1] in radians (roll, pitch, yaw)
@@ -58,6 +60,8 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     Returns:
         numpy array [x2, y2, z2] in degrees with axis remapping and clamping
     """
+    global last_valid_angles
+
     x1, y1, z1 = euler_rad
 
     # Convert radians to degrees
@@ -66,18 +70,27 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     # Axis remapping: x2=y1 (pitch), y2=z1 (yaw), z2=x1 (roll)
     x2_deg = -y1 * rad_to_deg
     y2_deg = x1 * rad_to_deg
-    z2_deg = z1 * rad_to_deg
+    z2_deg = -z1 * rad_to_deg
 
     # x2_deg = 0
     # y2_deg = 0
     # z2_deg = 0
 
-    # Range clamping for safety
-    x2 = np.clip(x2_deg, -180, 180)
-    y2 = np.clip(y2_deg, -100, 100)
-    z2 = np.clip(z2_deg, -35, 35)
+    # Define angle limits
+    x2_min, x2_max = -90, 90
+    y2_min, y2_max = -100, 100
+    z2_min, z2_max = -35, 35
 
-    return np.array([x2, y2, z2])
+    # Check if any angle exceeds limits
+    if (x2_deg < x2_min or x2_deg > x2_max or
+        y2_deg < y2_min or y2_deg > y2_max or
+        z2_deg < z2_min or z2_deg > z2_max):
+        # Return last valid angles if any limit is exceeded
+        return last_valid_angles.copy()
+    else:
+        # All angles are within limits, update and return
+        last_valid_angles = np.array([x2_deg, y2_deg, z2_deg])
+        return last_valid_angles.copy()
 
 
 print(f"[Mac] Connected to Linux {LINUX_IP}:{PORT}, sending head rotation data...")
@@ -92,16 +105,19 @@ try:
     start_time = time.time()
 
     while True:
+        # Get timestamp before processing
+        timestamp = time.time()
+
         head_pose = xr_client.get_pose_by_name("headset")
         if head_pose is not None:
             euler_angles = quaternion_to_euler(head_pose[3:])
             # Apply axis remapping and range clamping
             mapped_angles = map_and_clamp_euler(euler_angles)
-            data_to_send = f"{mapped_angles[0]:.2f}, {mapped_angles[1]:.2f}, {mapped_angles[2]:.2f}"
+            data_to_send = f"{mapped_angles[0]:.2f}, {mapped_angles[1]:.2f}, {mapped_angles[2]:.2f}, {timestamp:.6f}"
             status = "OK"
         else:
             # If headset data is not available, send zeros for the three mapped angles.
-            data_to_send = "0.0, 0.0, 0.0"
+            data_to_send = f"0.0, 0.0, 0.0, {timestamp:.6f}"
             mapped_angles = np.array([0.0, 0.0, 0.0])
             status = "NO HEADSET"
 
