@@ -61,11 +61,10 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     t1 = 1.0 - 2.0 * (x * x + y * y)
     roll_x = np.arctan2(t0, t1)
 
-    # Pitch (y-axis rotation): -π to π (using atan2 instead of asin)
-    t2 = 2.0 * (w * y - z * x)
-    t2 = np.clip(t2, -1.0, 1.0)  # Safety clamp
-    # Use atan2 for full range
-    pitch_y = np.arctan2(t2, np.sqrt(1.0 - t2 * t2))
+    # Pitch (y-axis rotation): -π to π
+    sinp = 2.0 * (w * y - z * x)
+    cosp = 1.0 - 2.0 * (y * y + z * z)
+    pitch_y = np.arctan2(sinp, cosp)
 
     # Yaw (z-axis rotation): -π to π
     t3 = 2.0 * (w * z + x * y)
@@ -77,14 +76,13 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
 
 def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     """
-    Map headset Euler angles to output coordinate system with range protection.
-    If any angle exceeds limits, returns the last valid rotation data instead.
+    Map headset Euler angles to output coordinate system.
 
     Args:
         euler_rad: numpy array [x1, y1, z1] in radians (roll, pitch, yaw)
 
     Returns:
-        numpy array [x2, y2, z2] in degrees with axis remapping and clamping
+        numpy array [x2, y2, z2] in degrees with axis remapping
     """
     global last_valid_angles, x2_offset, current_x2_raw
 
@@ -102,27 +100,12 @@ def map_and_clamp_euler(euler_rad: np.ndarray) -> np.ndarray:
     current_x2_raw = x2_deg
     x2_deg = x2_deg - x2_offset
 
+    # Normalize x2 to [-180, 180] range
+    x2_deg = ((x2_deg + 180) % 360) - 180
 
-
-    # x2_deg = 0
-    # y2_deg = 0
-    # z2_deg = 0
-
-    # Define angle limits
-    x2_min, x2_max = -90, 90
-    y2_min, y2_max = -100, 100
-    z2_min, z2_max = -35, 35
-
-    # Check if any angle exceeds limits
-    if (x2_deg < x2_min or x2_deg > x2_max or
-        y2_deg < y2_min or y2_deg > y2_max or
-        z2_deg < z2_min or z2_deg > z2_max):
-        # Return last valid angles if any limit is exceeded
-        return last_valid_angles.copy()
-    else:
-        # All angles are within limits, update and return
-        last_valid_angles = np.array([x2_deg, y2_deg, z2_deg])
-        return last_valid_angles.copy()
+    # Update and return current angles
+    last_valid_angles = np.array([x2_deg, y2_deg, z2_deg])
+    return last_valid_angles.copy()
 
 
 print(f"[PC] Connected to Linux {LINUX_IP}:{PORT}, sending head rotation data...")
