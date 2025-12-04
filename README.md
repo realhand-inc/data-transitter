@@ -88,31 +88,56 @@ source venv/bin/activate
 
 ### Main Demo: Head Rotation Sender
 
-This script is the primary demo for transmitting head rotation data from an XR headset to a remote Linux machine via ZMQ. It captures the headset's orientation, converts it to Euler angles, applies mapping and clamping, and sends the data.
+This script is the primary demo for transmitting head rotation data from an XR headset to remote machines via ZMQ. It captures the headset's orientation and converts it to Euler angles using a geometric approach that avoids gimbal lock issues.
 
 **Features:**
 -   Captures headset pose using `XrClient`.
--   Converts Quaternion to Euler angles (Roll, Pitch, Yaw).
--   Maps coordinate systems:
-    -   `x2 = -pitch`
-    -   `y2 = roll`
-    -   `z2 = -yaw`
--   Clamps angles to safe limits:
-    -   X2: [-90, 90]
-    -   Y2: [-100, 100]
-    -   Z2: [-35, 35]
+-   Converts Quaternion to Euler angles (Yaw, Pitch, Roll) using geometric look-at vector approach.
+-   Supports multiple network endpoints simultaneously.
 -   **Reset Functionality**:
-    -   Press the **'A' button** on the XR controller or the **'r' key** on the keyboard to reset the X2 axis (pitch) offset to the current position.
--   Sends data in the format: `x2, y2, z2, timestamp`.
+    -   Press the **'A' button** on the XR controller or the **'r' key** on the keyboard to reset yaw offset to the current position.
+-   Sends data in CSV format: `yaw, pitch, roll, timestamp`.
+
+#### Quaternion to Euler Angle Conversion
+
+The script converts VR headset quaternions to Euler angles using a geometric approach:
+
+**Pitch Calculation (Geometric Approach):**
+- Computes the look-at (forward) vector from the quaternion
+- Extracts the vertical component: `look_y = 2(yz - wx)`
+- Pitch angle: `pitch = -arcsin(look_y)`
+- **Key advantage:** Geometrically independent of yaw and roll
+- When you turn your head (yaw), the vertical component stays constant
+- When you tilt your head (roll), look direction doesn't change
+
+**Yaw and Roll Calculation (Standard):**
+- Yaw: Extracted using `arctan2` for full -180° to 180° range
+- Roll: Extracted using `arcsin` for -90° to 90° range
+
+**Angle Ranges:**
+- Yaw: -180° to 180° (full rotation)
+- Pitch: -90° to 90° (up/down)
+- Roll: -90° to 90° (tilt)
+
+**Why This Approach:**
+Traditional Euler angle extraction can suffer from coupling at extreme yaw angles (±90°), where pitch readings become dependent on roll. The geometric look-at vector approach eliminates this coupling by deriving pitch from a component that's inherently independent of horizontal rotation (yaw) and head tilt (roll).
+
+**Coordinate System:**
+- Y-axis: Vertical (up)
+- Z-axis: Forward
+- X-axis: Right
+- Right-handed coordinate system
 
 **Usage:**
 
-1.  **Configure IP Address:**
-    Open `scripts/RH/test_head_rotation_sender.py` and update the `LINUX_IP` variable to match your receiver's IP address.
+1.  **Configure Endpoints:**
+    Open `scripts/RH/test_head_rotation_sender.py` and update the `TARGET_ENDPOINTS` list to match your receiver addresses.
     ```python
-    # Server address
-    LINUX_IP = "192.168.1.56"  # <--- Update this
-    PORT = 5555
+    # List of target endpoints (IP, PORT)
+    TARGET_ENDPOINTS = [
+        ("192.168.1.56", 5555),
+        ("127.0.0.1", 8080),
+    ]
     ```
 
 2.  **Run the script:**

@@ -51,26 +51,23 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     """
     x, y, z, w = q
 
-    # Pitch (Y-axis rotation, first): -π/2 to π/2
-    sin_pitch = 2.0 * (w * x + y * z)
-    sin_pitch = np.clip(sin_pitch, -1.0, 1.0)
-    pitch = np.arcsin(sin_pitch)
+    # Pitch: Compute from look-at vector's vertical component (independent of yaw/roll)
+    # Get look-at (forward) vector by rotating default forward [0, 0, -1]
+    look_x = 2.0 * (x*z + w*y)
+    look_y = 2.0 * (y*z - w*x)
+    look_z = 1.0 - 2.0 * (x*x + y*y)
 
-    # Yaw (Z-axis rotation, second): -π to π (negated for correct output)
+    # Pitch angle from vertical component (Y-axis is up, negated for correct direction)
+    pitch = -np.arcsin(np.clip(look_y, -1.0, 1.0))
+
+    # Yaw (Z-axis rotation): -π to π (negated for correct output)
     sin_yaw = 2.0 * (w * y - z * x)
     cos_yaw = 1.0 - 2.0 * (y * y + x * x)
     yaw = -np.arctan2(sin_yaw, cos_yaw)
 
-    # Roll (X-axis rotation, third): -π/2 to π/2 (negated for correct output)
+    # Roll (X-axis rotation): -π/2 to π/2 (negated for correct output)
     sin_roll = 2.0 * (w * z + x * y)
-    sin_roll = np.clip(sin_roll, -1.0, 1.0)
-    roll = -np.arcsin(sin_roll)
-
-    # FIX: Correct pitch inversion when yaw exceeds ±90°
-    # When |yaw| > 90°, we're in the "backward-facing" Euler representation
-    # where pitch sign is inverted relative to the forward reference frame
-    if abs(yaw) > np.pi / 2:
-        pitch = -pitch
+    roll = -np.arcsin(np.clip(sin_roll, -1.0, 1.0))
 
     # Return [yaw, pitch, roll] with negations already applied in calculations
     return np.array([yaw, pitch, roll])

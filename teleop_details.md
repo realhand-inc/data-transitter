@@ -162,3 +162,111 @@
   ```bash
   python scripts/hardware/teleop_dual_arx_r5_hardware.py
   ```
+
+# Head Rotation Data Transmission
+
+## Overview
+
+The head rotation data sender (`scripts/RH/test_head_rotation_sender.py`) captures VR headset orientation and transmits Euler angles over the network using ZeroMQ.
+
+## Quaternion to Euler Conversion
+
+### Conversion Method
+
+```python
+# Pitch: From look-at vector's vertical component
+look_y = 2.0 * (y*z - w*x)  # Vertical component of forward direction
+pitch = -arcsin(clip(look_y, -1, 1))
+
+# Yaw: Standard extraction
+yaw = -arctan2(2(wy - zx), 1 - 2(y² + x²))
+
+# Roll: Standard extraction
+roll = -arcsin(clip(2(wz + xy), -1, 1))
+```
+
+### Independence Properties
+
+- Pitch is geometrically independent of yaw and roll
+- No coupling at extreme angles (yaw = ±90°)
+- Smooth continuous readings across all orientations
+
+### Why Look-At Vector Approach
+
+Traditional Euler angle extraction from rotation matrices can suffer from coupling issues:
+- At yaw ≈ ±90°, standard formulas mix pitch and roll components
+- Pitch readings become dependent on roll value
+- Creates unstable or incorrect readings
+
+The look-at vector approach solves this by:
+- Computing the forward (look-at) direction vector from the quaternion
+- Extracting pitch directly from the vertical component of this vector
+- This component is geometrically independent of yaw (horizontal rotation) and roll (head tilt)
+
+## Network Protocol
+
+**Transport:** ZeroMQ PUSH/PULL pattern
+**Format:** CSV string: `"yaw_deg, pitch_deg, roll_deg, timestamp"`
+**Endpoints:** Configurable in `TARGET_ENDPOINTS` list
+
+**Example Data:**
+```
+-45.23, 12.56, -3.14, 1638360123.456789
+```
+
+**Multi-Endpoint Support:**
+The script can broadcast to multiple receivers simultaneously:
+```python
+TARGET_ENDPOINTS = [
+    ("192.168.1.56", 5555),
+    ("127.0.0.1", 8080),
+]
+```
+
+## Reset Functionality
+
+### Triggers
+- VR Controller **A button**
+- Keyboard **'R' key**
+
+### Behavior
+- Captures current yaw value as offset
+- Subtracts offset from subsequent yaw readings
+- Effectively resets yaw to 0° at current orientation
+- Reset indicator shown in terminal display
+
+## Terminal Display
+
+Shows real-time data:
+- Connection status and active endpoints
+- Current Euler angles in degrees
+- Frame count and update frequency (Hz)
+- Yaw offset status with `[ACTIVE]` indicator
+- Control instructions
+
+## Angle Ranges
+
+- **Yaw:** -180° to 180° (full rotation, using `arctan2`)
+- **Pitch:** -90° to 90° (up/down, using `arcsin`)
+- **Roll:** -90° to 90° (tilt, using `arcsin`)
+
+## Coordinate System
+
+- **Y-axis:** Vertical (up)
+- **Z-axis:** Forward
+- **X-axis:** Right
+- Right-handed coordinate system
+
+## Usage
+
+```bash
+python scripts/RH/test_head_rotation_sender.py
+```
+
+**Requirements:**
+- XRoboToolkit VR/AR device connected
+- Network endpoints accessible
+- ZeroMQ library installed (`pip install pyzmq`)
+
+**Configuration:**
+Edit `TARGET_ENDPOINTS` in the script to add/modify receiver addresses.
