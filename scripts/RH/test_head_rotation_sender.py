@@ -76,12 +76,13 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     return np.array([yaw, pitch, roll])
 
 
-def send_euler_data(euler_rad: np.ndarray):
+def send_euler_data(euler_rad: np.ndarray, timestamp: float):
     """
-    Send Euler angles in degrees to all configured endpoints.
+    Send Euler angles in degrees and timestamp to all configured endpoints.
 
     Args:
         euler_rad: numpy array [yaw, pitch, roll] in radians
+        timestamp: timestamp in seconds
     """
     yaw, pitch, roll = euler_rad
 
@@ -91,8 +92,8 @@ def send_euler_data(euler_rad: np.ndarray):
     pitch_deg = pitch * rad_to_deg
     roll_deg = roll * rad_to_deg
 
-    # Send simple CSV format: yaw, pitch, roll
-    data_to_send = f"{yaw_deg:.2f}, {pitch_deg:.2f}, {roll_deg:.2f}"
+    # Send simple CSV format: yaw, pitch, roll, timestamp
+    data_to_send = f"{yaw_deg:.2f}, {pitch_deg:.2f}, {roll_deg:.2f}, {timestamp:.6f}"
 
     for sock in sockets:
         sock.send_string(data_to_send)
@@ -146,7 +147,8 @@ try:
             status = "NO HEADSET"
 
         # Send Euler angles to all endpoints
-        send_euler_data(euler_angles)
+        current_timestamp = time.time()
+        send_euler_data(euler_angles, current_timestamp)
 
         # Calculate frequency
         frame_count += 1
