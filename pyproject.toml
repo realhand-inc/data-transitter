@@ -25,6 +25,7 @@ dependencies = [
     "pyrealsense2",
     "opencv-python",
     "tyro",
+    "pynput",
 ]
 
 [project.optional-dependencies]

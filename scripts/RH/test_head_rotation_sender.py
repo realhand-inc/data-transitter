@@ -3,6 +3,7 @@ import time
 import sys
 import os
 import numpy as np
+from pynput import keyboard
 
 # Ensure xrobotoolkit_teleop is in the Python path
 script_dir = os.path.dirname(__file__)
@@ -29,6 +30,17 @@ for ip, port in TARGET_ENDPOINTS:
     print(f"[PC] Connected to {ip}:{port}")
 
 xr_client: XrClient = None
+keyboard_reset_triggered = False  # Flag for keyboard reset
+
+
+def on_press(key):
+    """Keyboard listener callback for key press events."""
+    global keyboard_reset_triggered
+    try:
+        if hasattr(key, 'char') and key.char == 'r':
+            keyboard_reset_triggered = True
+    except AttributeError:
+        pass
 
 
 def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
@@ -44,18 +56,23 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     sin_pitch = np.clip(sin_pitch, -1.0, 1.0)
     pitch = np.arcsin(sin_pitch)
 
-    # Yaw (Z-axis rotation, second): -π to π
+    # Yaw (Z-axis rotation, second): -π to π (negated for correct output)
     sin_yaw = 2.0 * (w * y - z * x)
     cos_yaw = 1.0 - 2.0 * (y * y + x * x)
-    yaw = np.arctan2(sin_yaw, cos_yaw)
+    yaw = -np.arctan2(sin_yaw, cos_yaw)
 
-    # Roll (X-axis rotation, third): -π/2 to π/2
+    # Roll (X-axis rotation, third): -π/2 to π/2 (negated for correct output)
     sin_roll = 2.0 * (w * z + x * y)
     sin_roll = np.clip(sin_roll, -1.0, 1.0)
-    roll = np.arcsin(sin_roll)
+    roll = -np.arcsin(sin_roll)
 
+    # FIX: Correct pitch inversion when yaw exceeds ±90°
+    # When |yaw| > 90°, we're in the "backward-facing" Euler representation
+    # where pitch sign is inverted relative to the forward reference frame
+    if abs(yaw) > np.pi / 2:
+        pitch = -pitch
 
-    # DON'T CHANGE ORDER: return [yaw, pitch, roll]
+    # Return [yaw, pitch, roll] with negations already applied in calculations
     return np.array([yaw, pitch, roll])
 
 
@@ -86,8 +103,15 @@ try:
     xr_client = XrClient()
     print("XrClient initialized.\n")
 
+    # Start keyboard listener in a separate thread
+    listener = keyboard.Listener(on_press=on_press)
+    listener.start()
+    print("Keyboard listener started.\n")
+
     frame_count = 0
     start_time = time.time()
+    yaw_offset = 0.0  # Yaw offset for reset functionality
+    reset_button_pressed = False  # Track button state to detect single press
 
     while True:
         head_pose = xr_client.get_pose_by_name("headset")
@@ -97,6 +121,24 @@ try:
 
             # Convert to Euler angles [yaw, pitch, roll]
             euler_angles = quaternion_to_euler(quaternion)
+
+            # Check for reset triggers (A button or R key)
+            a_button_state = xr_client.get_button_state_by_name("A")
+
+            if (a_button_state and not reset_button_pressed) or keyboard_reset_triggered:
+                # Reset triggered - capture current yaw as offset
+                yaw_offset = euler_angles[0]
+                reset_button_pressed = True
+                keyboard_reset_triggered = False  # Reset keyboard flag
+                source = "A Button" if a_button_state else "R Key"
+                print(f"\n[RESET via {source}] Yaw offset captured: {yaw_offset * 180.0 / np.pi:.2f}°\n")
+            elif not a_button_state:
+                # Button released - ready for next press
+                reset_button_pressed = False
+
+            # Apply yaw offset to reset yaw to zero
+            euler_angles[0] -= yaw_offset
+
             status = "OK"
         else:
             # If headset data is not available, send zeros
@@ -126,9 +168,11 @@ try:
         for idx, (ip, port) in enumerate(TARGET_ENDPOINTS, 1):
             print(f"  [{idx}] {ip}:{port}")
         print("\nControls:")
+        print("  - Press A button (VR) or R key (keyboard) to reset yaw to zero")
         print("  - Ctrl+C to exit")
         print("=" * 80)
         print(f"\nStatus: [{status:^12}]  Frame: {frame_count:05d}  Frequency: {frequency:>5.1f} Hz")
+        print(f"Yaw Offset: {yaw_offset * 180.0 / np.pi:>8.2f}° {'[ACTIVE]' if abs(yaw_offset) > 0.01 else ''}")
         print("=" * 80)
         print("\nEuler Angles (XYZ rotation order):")
         print(f"  Yaw:   {yaw_deg:>8.2f}°")
@@ -147,6 +191,10 @@ finally:
     if xr_client:
         xr_client.close()
         print("XrClient closed.")
+    # Stop keyboard listener
+    if 'listener' in locals():
+        listener.stop()
+        print("Keyboard listener stopped.")
     # Close all sockets
     for sock in sockets:
         sock.close()
