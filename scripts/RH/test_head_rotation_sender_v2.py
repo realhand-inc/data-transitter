@@ -78,18 +78,19 @@ def execute_adb_command(command):
         return False, str(e)
 
 
+ADB_PATH = "adb"
+
 def get_adb_devices():
     """Get list of connected ADB devices"""
     try:
+        # Using shell=True to leverage system PATH resolution
         result = subprocess.run(
-            ["adb", "devices"],
+            f"{ADB_PATH} devices",
+            shell=True,
             capture_output=True,
             text=True,
             timeout=3
         )
-
-        print(f"[DEBUG] ADB return code: {result.returncode}")
-        print(f"[DEBUG] ADB raw output:\n{repr(result.stdout)}\n")
 
         if result.returncode == 0:
             devices = []
@@ -97,38 +98,23 @@ def get_adb_devices():
 
             # Process each line
             for i, line in enumerate(lines):
-                original_line = line
                 line = line.strip()
-
-                print(f"[DEBUG] Line {i}: {repr(original_line)} -> stripped: {repr(line)}")
 
                 # Skip header and empty lines
                 if not line or 'List of devices attached' in line or '* daemon' in line:
-                    print(f"[DEBUG]   -> Skipped (header/empty)")
                     continue
 
                 # Split by any whitespace
                 parts = line.split()
-                print(f"[DEBUG]   -> Parts: {parts}, Length: {len(parts)}")
 
                 # Accept lines with at least device ID and status
                 if len(parts) >= 2:
                     device_id = parts[0]
                     status = parts[1]
                     devices.append({'id': device_id, 'status': status})
-                    print(f"[DEBUG]   -> ADDED: {device_id} ({status})")
-                else:
-                    print(f"[DEBUG]   -> REJECTED: Not enough parts")
-
-            print(f"\n[DEBUG] === ADB SCAN COMPLETE ===")
-            print(f"[DEBUG] Total devices found: {len(devices)}")
-            for dev in devices:
-                print(f"[DEBUG]   - {dev['id']} ({dev['status']})")
-            print(f"[DEBUG] ========================\n")
 
             return devices
 
-        print(f"[DEBUG] ADB command failed: return code {result.returncode}")
         return []
 
     except FileNotFoundError:
@@ -136,8 +122,6 @@ def get_adb_devices():
         return []
     except Exception as e:
         print(f"[ERROR] ADB scan exception: {e}")
-        import traceback
-        traceback.print_exc()
         return []
 
 
@@ -154,8 +138,6 @@ def scan_local_network():
             timeout=2
         )
 
-        print(f"[DEBUG] Network scan - hostname -I: {repr(result.stdout)}")
-
         local_ips = result.stdout.strip().split()
         if not local_ips:
             # Fallback: try ip route
@@ -166,7 +148,6 @@ def scan_local_network():
                 text=True,
                 timeout=2
             )
-            print(f"[DEBUG] Network scan - ip route fallback: {repr(result.stdout)}")
             if result.stdout.strip():
                 local_ips = [result.stdout.strip()]
 
@@ -177,8 +158,6 @@ def scan_local_network():
                 if not ip.startswith('127.'):
                     local_ip = ip
                     break
-
-            print(f"[DEBUG] Using local IP: {local_ip}")
 
             if local_ip:
                 ip_parts = local_ip.split('.')
@@ -196,8 +175,6 @@ def scan_local_network():
                     test_ip = f"{network_prefix}.{i}"
                     test_ips.add(test_ip)
 
-                print(f"[DEBUG] Testing {len(test_ips)} IPs: {sorted(test_ips)}")
-
                 # Quick ping test with timeout
                 for ip in test_ips:
                     try:
@@ -208,18 +185,13 @@ def scan_local_network():
                         )
                         if result.returncode == 0:
                             devices.append(ip)
-                            print(f"[DEBUG] Found device: {ip}")
                     except subprocess.TimeoutExpired:
                         pass
-                    except Exception as e:
-                        print(f"[DEBUG] Ping error for {ip}: {e}")
+                    except Exception:
+                        pass
 
-        print(f"[DEBUG] Network scan found {len(devices)} device(s): {devices}")
-
-    except Exception as e:
-        print(f"[DEBUG] Network scan error: {e}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        pass
 
     return devices
 
@@ -338,6 +310,10 @@ class HeadRotationGUI:
         self.buttons = []
         self.init_buttons()
 
+        # Input state
+        self.input_mode = False
+        self.input_text = ""
+
         # Create window
         cv2.namedWindow(self.window_name)
         cv2.setMouseCallback(self.window_name, self.mouse_callback)
@@ -352,8 +328,51 @@ class HeadRotationGUI:
             success, output = execute_adb_command(ADB_STOP_APP)
             print(f"[ADB] Stop app: {'Success' if success else 'Failed'}")
 
+        def connect_ip_callback():
+            self.input_mode = True
+            self.input_text = ""
+
+        def disconnect_all_callback():
+            def _disconnect():
+                print("[ADB] Disconnecting all devices...")
+                execute_adb_command("adb disconnect")
+                self.refresh_devices()
+            threading.Thread(target=_disconnect, daemon=True).start()
+
         self.buttons.append(Button(50, 670, 150, 40, "Open App", open_app_callback))
         self.buttons.append(Button(220, 670, 150, 40, "Stop App", stop_app_callback))
+        self.buttons.append(Button(1000, 390, 120, 30, "Connect IP", connect_ip_callback))
+        self.buttons.append(Button(1140, 390, 120, 30, "Disconnect All", disconnect_all_callback))
+
+    def connect_adb_device(self, ip):
+        """Connect to a specific ADB device IP in a background thread"""
+        def _connect():
+            print(f"[ADB] Connecting to {ip}...")
+            # Optional: disconnect others if you want to enforce single connection
+            # execute_adb_command("adb disconnect") 
+            success, output = execute_adb_command(f"adb connect {ip}")
+            print(f"[ADB] Connect result: {output}")
+            self.refresh_devices()
+
+        threading.Thread(target=_connect, daemon=True).start()
+
+    def handle_input(self, key):
+        """Handle keyboard input"""
+        if self.input_mode:
+            if key == 13: # Enter
+                if self.input_text:
+                    self.connect_adb_device(self.input_text)
+                self.input_mode = False
+            elif key == 27: # Esc
+                self.input_mode = False
+            elif key == 8: # Backspace
+                self.input_text = self.input_text[:-1]
+            elif 32 <= key <= 126: # Printable characters
+                # Simple filter for IP characters (optional)
+                self.input_text += chr(key)
+        else:
+            if key == 27 or key == ord('q'):  # ESC or Q
+                self.running = False
 
     def update_data(self, **kwargs):
         """Thread-safe update of current data"""
@@ -406,8 +425,41 @@ class HeadRotationGUI:
         self.draw_angle_history(frame, x=50, y=400)
         self.draw_status_info(frame)
         self.draw_buttons(frame)
+        
+        if self.input_mode:
+            self.draw_input_box(frame)
 
         return frame
+
+    def draw_input_box(self, frame):
+        """Draw modal input box for IP entry"""
+        # Overlay
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (0, 0), (self.width, self.height), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+        # Box
+        cx, cy = self.width // 2, self.height // 2
+        w, h = 400, 150
+        x, y = cx - w // 2, cy - h // 2
+        
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 255), -1)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (100, 100, 100), 2)
+        
+        # Title
+        cv2.putText(frame, "Enter Device IP:", (x + 20, y + 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    
+        # Input field
+        cv2.rectangle(frame, (x + 20, y + 60), (x + w - 20, y + 100), (240, 240, 240), -1)
+        cv2.rectangle(frame, (x + 20, y + 60), (x + w - 20, y + 100), (0, 0, 0), 1)
+        
+        cv2.putText(frame, self.input_text + "_", (x + 30, y + 90),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+                    
+        # Instructions
+        cv2.putText(frame, "Enter to Connect | Esc to Cancel", (x + 20, y + 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
 
     def draw_header(self, frame):
         """Draw header with title and status"""
@@ -754,10 +806,9 @@ class HeadRotationGUI:
             frame = self.draw_frame()
             cv2.imshow(self.window_name, frame)
 
-            key = cv2.waitKey(30)  # 30ms = ~33 FPS
-            if key == 27 or key == ord('q'):  # ESC or Q
-                self.running = False
-                break
+            key = cv2.waitKey(30)
+            if key != -1:
+                self.handle_input(key & 0xFF)
 
         # Stop device scanner
         self.device_scanner_running = False
