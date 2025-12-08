@@ -1,1 +1,0 @@
-"""RealHand desktop application package."""

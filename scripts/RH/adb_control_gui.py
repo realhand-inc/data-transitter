@@ -62,10 +62,12 @@ class AdbControlApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("RealHand TeleOp")
+        self.log_visible = False
         self.devices = []
         self.status_var = tk.StringVar(value="Idle")
         self.ip_var = tk.StringVar()
         self.device_vars = {}
+        self.palette = {}
 
         # Head rotation data storage
         self.rotation_data = {'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0}
@@ -82,6 +84,8 @@ class AdbControlApp:
             'pitch': deque(maxlen=self.history_length),
             'roll': deque(maxlen=self.history_length)
         }
+        self.last_data_ts = 0.0
+        self.last_send_ts = 0.0
 
         # XrClient (initialized later)
         self.xr_client = None
@@ -99,13 +103,21 @@ class AdbControlApp:
         self.screenshot_label = None
         self.screenshot_image = None  # keep reference to avoid GC
 
-        main = ttk.Frame(root, padding=12)
+        self.configure_styles()
+
+        main = ttk.Frame(root, padding=12, style="App.TFrame")
         main.grid(column=0, row=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
 
-        title = ttk.Label(main, text="RealHand TeleOp", font=("TkDefaultFont", 16, "bold"))
-        title.grid(column=0, row=0, padx=8, pady=(0, 8), sticky="w")
+        header = tk.Frame(main, bg=self.palette["accent"])
+        header.grid(column=0, row=0, columnspan=2, sticky="ew", pady=(0, 10))
+        header.columnconfigure(0, weight=1)
+
+        title = ttk.Label(header, text="RealHand TeleOp", style="Header.TLabel")
+        title.grid(column=0, row=0, padx=10, pady=8, sticky="w")
+        self.log_toggle_btn = ttk.Button(header, text="Show Logs", style="Ghost.TButton", command=self.toggle_log_frame)
+        self.log_toggle_btn.grid(column=1, row=0, padx=10, pady=8, sticky="e")
 
         self.build_devices_frame(main)
         self.build_data_frame(main)
@@ -121,34 +133,69 @@ class AdbControlApp:
         # Start UI update loop
         self.update_data_display()
 
+    def configure_styles(self):
+        """Apply a simple modern palette and ttk styles."""
+        self.palette = {
+            "bg": "#eef2f8",
+            "panel": "#ffffff",
+            "accent": "#2563eb",
+            "muted": "#5f6b7a",
+            "text": "#0f172a"
+        }
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        self.root.configure(bg=self.palette["bg"])
+
+        style.configure("App.TFrame", background=self.palette["bg"])
+        style.configure("Surface.TFrame", background=self.palette["panel"])
+        style.configure("Section.TLabelframe", background=self.palette["panel"], foreground=self.palette["text"], borderwidth=1, relief="solid")
+        style.configure("Section.TLabelframe.Label", background=self.palette["panel"], foreground=self.palette["muted"], font=("Segoe UI", 10, "bold"))
+        style.configure("Header.TLabel", background=self.palette["accent"], foreground="white", font=("Segoe UI", 14, "bold"))
+        style.configure("TLabel", background=self.palette["panel"], foreground=self.palette["text"])
+        style.configure("Device.TCheckbutton", background=self.palette["panel"], foreground=self.palette["text"])
+
+        style.configure("Accent.TButton", background=self.palette["accent"], foreground="white", padding=6, relief="flat")
+        style.map("Accent.TButton", background=[("active", "#3b82f6")], foreground=[("disabled", "#a1acc0")])
+        style.configure("Ghost.TButton", background=self.palette["panel"], foreground=self.palette["text"], padding=6, relief="flat", borderwidth=1)
+        style.map("Ghost.TButton",
+                  background=[("active", "#e5ebf5")],
+                  relief=[("pressed", "flat")])
+        style.configure("BadgeIdle.TLabel", background=self.palette["panel"], foreground=self.palette["muted"], padding=4, borderwidth=1, relief="solid")
+        style.configure("BadgeGood.TLabel", background="#d9f5d3", foreground="#14532d", padding=4, borderwidth=1, relief="solid")
+        style.configure("BadgeWarn.TLabel", background="#fff4d6", foreground="#92400e", padding=4, borderwidth=1, relief="solid")
+
     def build_devices_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Devices")
+        frame = ttk.LabelFrame(parent, text="Devices", style="Section.TLabelframe")
         frame.grid(column=0, row=1, padx=8, pady=4, sticky="nsew")
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
         # Device rows with inline actions
-        self.devices_container = ttk.Frame(frame)
+        self.devices_container = ttk.Frame(frame, style="Surface.TFrame")
         self.devices_container.grid(column=0, row=0, rowspan=6, padx=(8, 4), pady=8, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(5, weight=1)
 
-        refresh_btn = ttk.Button(frame, text="Refresh", command=self.refresh_devices)
+        refresh_btn = ttk.Button(frame, text="Refresh", style="Accent.TButton", command=self.refresh_devices)
         refresh_btn.grid(column=1, row=0, padx=4, pady=(8, 2), sticky="ew")
 
         ttk.Label(frame, text="IP:Port").grid(column=1, row=1, padx=4, pady=2, sticky="w")
         ip_entry = ttk.Entry(frame, textvariable=self.ip_var, width=18)
         ip_entry.grid(column=1, row=2, padx=4, pady=2, sticky="ew")
-        connect_btn = ttk.Button(frame, text="Connect over IP", command=self.connect_ip)
+        connect_btn = ttk.Button(frame, text="Connect over IP", style="Ghost.TButton", command=self.connect_ip)
         connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
 
-        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", command=self.auto_connect_wifi)
+        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", style="Ghost.TButton", command=self.auto_connect_wifi)
         wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 4), sticky="ew")
 
-        screenshot_btn = ttk.Button(frame, text="Screenshot", command=self.capture_screenshot)
+        screenshot_btn = ttk.Button(frame, text="Screenshot", style="Ghost.TButton", command=self.capture_screenshot)
         screenshot_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
 
-        self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground="green")
+        self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground=self.palette["accent"])
         self.status_label.grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
@@ -157,24 +204,31 @@ class AdbControlApp:
         # Rotation data endpoint section
         ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
-        ttk.Label(frame, text="IP:Port").grid(column=1, row=9, padx=4, pady=2, sticky="w")
-        rotation_ip_entry = ttk.Entry(frame, textvariable=self.rotation_ip_var, width=18)
-        rotation_ip_entry.grid(column=1, row=10, padx=4, pady=2, sticky="ew")
+        rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
+        rotation_entry_row.grid(column=0, row=9, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        rotation_entry_row.columnconfigure(0, weight=1)
+        rotation_entry_row.columnconfigure(1, weight=0)
+        rotation_entry_row.columnconfigure(2, weight=0)
 
-        rotation_connect_btn = ttk.Button(frame, text="Connect", command=self.connect_rotation_endpoint)
-        rotation_connect_btn.grid(column=1, row=11, padx=4, pady=(2, 4), sticky="ew")
+        rotation_ip_entry = ttk.Entry(rotation_entry_row, textvariable=self.rotation_ip_var, width=18)
+        rotation_ip_entry.grid(column=0, row=0, padx=(0, 6), pady=2, sticky="ew")
+
+        rotation_connect_btn = ttk.Button(rotation_entry_row, text="Connect", style="Ghost.TButton", command=self.connect_rotation_endpoint)
+        rotation_connect_btn.grid(column=1, row=0, padx=4, pady=2, sticky="ew")
+
+        rotation_disconnect_btn = ttk.Button(rotation_entry_row, text="Disconnect All", style="Ghost.TButton", command=self.disconnect_all_rotation_endpoints)
+        rotation_disconnect_btn.grid(column=2, row=0, padx=4, pady=2, sticky="ew")
 
         # List of connected rotation endpoints
-        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=9, padx=8, pady=(0, 2), sticky="w")
-        self.rotation_endpoints_listbox = tk.Listbox(frame, height=3, selectmode=tk.SINGLE)
-        self.rotation_endpoints_listbox.grid(column=0, row=10, rowspan=2, padx=(8, 4), pady=2, sticky="nsew")
-
-        disconnect_rotation_btn = ttk.Button(frame, text="Disconnect", command=self.disconnect_rotation_endpoint)
-        disconnect_rotation_btn.grid(column=0, row=12, padx=8, pady=(2, 8), sticky="ew")
+        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=10, padx=8, pady=(0, 2), sticky="w")
+        self.rotation_endpoints_frame = ttk.Frame(frame, style="Surface.TFrame")
+        self.rotation_endpoints_frame.grid(column=0, row=11, columnspan=2, padx=8, pady=2, sticky="nsew")
+        frame.rowconfigure(11, weight=1)
+        self.render_rotation_endpoints()
 
     def build_data_frame(self, parent: ttk.Frame):
         """Build the head rotation data display frame with gauges and history graph"""
-        frame = ttk.LabelFrame(parent, text="Head Rotation Data")
+        frame = ttk.LabelFrame(parent, text="Head Rotation Data", style="Section.TLabelframe")
         frame.grid(column=0, row=2, padx=8, pady=4, sticky="nsew")
         parent.rowconfigure(2, weight=1)
 
@@ -185,17 +239,23 @@ class AdbControlApp:
         # Status label
         self.data_status_label = ttk.Label(gauges_frame, text="Status: INIT | 0.0 Hz", font=("TkDefaultFont", 10))
         self.data_status_label.grid(column=0, row=0, columnspan=3, padx=4, pady=(0, 8))
+        status_row = ttk.Frame(gauges_frame)
+        status_row.grid(column=0, row=1, columnspan=3, padx=4, pady=(0, 8), sticky="w")
+        self.recv_status_badge = ttk.Label(status_row, text="Receive: idle", style="BadgeIdle.TLabel")
+        self.recv_status_badge.grid(column=0, row=0, padx=(0, 6))
+        self.send_status_badge = ttk.Label(status_row, text="Send: idle", style="BadgeIdle.TLabel")
+        self.send_status_badge.grid(column=1, row=0, padx=(0, 6))
 
         # Create three canvas widgets for gauges
         gauge_size = 120
-        self.yaw_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg='white', highlightthickness=1)
-        self.yaw_canvas.grid(column=0, row=1, padx=8, pady=4)
+        self.yaw_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
+        self.yaw_canvas.grid(column=0, row=2, padx=8, pady=4)
 
-        self.pitch_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg='white', highlightthickness=1)
-        self.pitch_canvas.grid(column=1, row=1, padx=8, pady=4)
+        self.pitch_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
+        self.pitch_canvas.grid(column=1, row=2, padx=8, pady=4)
 
-        self.roll_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg='white', highlightthickness=1)
-        self.roll_canvas.grid(column=2, row=1, padx=8, pady=4)
+        self.roll_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
+        self.roll_canvas.grid(column=2, row=2, padx=8, pady=4)
 
         # Draw initial gauges
         self.draw_gauge(self.yaw_canvas, 0, -180, 180, "Yaw", "#0000FF")
@@ -234,7 +294,7 @@ class AdbControlApp:
         # Draw outer circle
         canvas.create_oval(center_x - radius, center_y - radius,
                           center_x + radius, center_y + radius,
-                          outline='gray', width=2)
+                          outline='#d0d7e4', width=2)
 
         # Draw tick marks every 30 degrees
         for mark_angle in range(int(min_angle), int(max_angle) + 1, 30):
@@ -247,7 +307,7 @@ class AdbControlApp:
             inner_x = center_x + int((radius - 15) * math.cos(rad))
             inner_y = center_y + int((radius - 15) * math.sin(rad))
 
-            canvas.create_line(outer_x, outer_y, inner_x, inner_y, fill='gray', width=2)
+            canvas.create_line(outer_x, outer_y, inner_x, inner_y, fill='#d0d7e4', width=2)
 
         # Draw needle
         gauge_angle = -180 + (angle - min_angle) / (max_angle - min_angle) * 180
@@ -260,33 +320,45 @@ class AdbControlApp:
         canvas.create_oval(center_x - 6, center_y - 6, center_x + 6, center_y + 6, fill=color, outline=color)
 
         # Draw label
-        canvas.create_text(center_x, height - 30, text=label, font=("TkDefaultFont", 10, "bold"))
+        canvas.create_text(center_x, height - 30, text=label, font=("TkDefaultFont", 10, "bold"), fill=self.palette["text"])
 
         # Draw value
-        canvas.create_text(center_x, height - 10, text=f"{angle:.1f}°", font=("TkDefaultFont", 9))
+        canvas.create_text(center_x, height - 10, text=f"{angle:.1f}°", font=("TkDefaultFont", 9), fill=self.palette["muted"])
 
     def build_actions_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Actions")
+        frame = ttk.LabelFrame(parent, text="Actions", style="Section.TLabelframe")
         frame.grid(column=0, row=3, padx=8, pady=4, sticky="ew")
 
-        start_btn = ttk.Button(frame, text="Start", command=self.restart_app)
+        start_btn = ttk.Button(frame, text="Start", style="Ghost.TButton", command=self.restart_app)
         start_btn.grid(column=0, row=0, padx=6, pady=6, sticky="ew")
 
-        stop_btn = ttk.Button(frame, text="Stop", command=self.stop_app)
+        stop_btn = ttk.Button(frame, text="Stop", style="Accent.TButton", command=self.stop_app)
         stop_btn.grid(column=1, row=0, padx=6, pady=6, sticky="ew")
 
         frame.columnconfigure(0, weight=1)
         frame.columnconfigure(1, weight=1)
 
     def build_log_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Log")
+        frame = ttk.LabelFrame(parent, text="Log", style="Section.TLabelframe")
         frame.grid(column=0, row=4, padx=8, pady=4, sticky="nsew")
         parent.rowconfigure(4, weight=1)
 
-        self.log_widget = scrolledtext.ScrolledText(frame, wrap=tk.WORD, height=12, state="disabled")
+        self.log_widget = scrolledtext.ScrolledText(
+            frame,
+            wrap=tk.WORD,
+            height=10,
+            state="disabled",
+            background="#f5f7fb",
+            foreground=self.palette["text"],
+            insertbackground=self.palette["text"],
+            borderwidth=0
+        )
         self.log_widget.grid(column=0, row=0, padx=8, pady=8, sticky="nsew")
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(0, weight=1)
+
+        self.log_frame = frame
+        self.hide_log_frame()
 
     def schedule_refresh(self):
         self.root.after(DEVICE_REFRESH_MS, self.periodic_refresh)
@@ -306,6 +378,26 @@ class AdbControlApp:
             self.log_widget.see(tk.END)
             self.log_widget.configure(state="disabled")
         self.root.after(0, _append)
+
+    def toggle_log_frame(self):
+        if self.log_visible:
+            self.hide_log_frame()
+        else:
+            self.show_log_frame()
+
+    def hide_log_frame(self):
+        if hasattr(self, "log_frame"):
+            self.log_frame.grid_remove()
+            self.log_visible = False
+            if hasattr(self, "log_toggle_btn"):
+                self.log_toggle_btn.configure(text="Show Logs")
+
+    def show_log_frame(self):
+        if hasattr(self, "log_frame"):
+            self.log_frame.grid()
+            self.log_visible = True
+            if hasattr(self, "log_toggle_btn"):
+                self.log_toggle_btn.configure(text="Hide Logs")
 
     def refresh_devices(self):
         self.set_status("Refreshing devices...")
@@ -344,9 +436,13 @@ class AdbControlApp:
             power_btn = ttk.Button(row, text="Power Off", command=lambda d=device: self.power_off_device(d))
             power_btn.grid(column=2, row=0, padx=4, sticky="ew")
 
+            screenshot_btn = ttk.Button(row, text="Screenshot", command=lambda d=device: self.capture_screenshot_device(d))
+            screenshot_btn.grid(column=3, row=0, padx=4, sticky="ew")
+
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, weight=0)
             row.columnconfigure(2, weight=0)
+            row.columnconfigure(3, weight=0)
 
     def selected_devices(self):
         selected = [dev for dev, var in self.device_vars.items() if var.get() == 1]
@@ -446,6 +542,10 @@ class AdbControlApp:
             return
 
         device = selected[0]
+        self.capture_screenshot_device(device)
+
+    def capture_screenshot_device(self, device: str):
+        """Capture screenshot for a specific device."""
         self.set_status(f"Capturing screenshot from {device}...")
 
         def _run():
@@ -519,7 +619,7 @@ class AdbControlApp:
             # Add to lists
             self.rotation_sockets.append(sock)
             self.rotation_endpoints.append(endpoint)
-            self.rotation_endpoints_listbox.insert(tk.END, endpoint)
+            self.render_rotation_endpoints()
 
             self.log(f"Connected rotation data endpoint: {endpoint}")
             self.set_status(f"Connected to {endpoint}")
@@ -528,25 +628,19 @@ class AdbControlApp:
             messagebox.showerror("Rotation Data", f"Failed to connect: {e}")
             self.log(f"Failed to connect to {endpoint}: {e}")
 
-    def disconnect_rotation_endpoint(self):
-        """Disconnect selected rotation data endpoint"""
-        selection = self.rotation_endpoints_listbox.curselection()
-        if not selection:
-            messagebox.showinfo("Rotation Data", "Select an endpoint to disconnect.")
+    def disconnect_rotation_endpoint(self, endpoint: str):
+        """Disconnect a specific rotation data endpoint"""
+        if endpoint not in self.rotation_endpoints:
             return
-
-        index = selection[0]
-        endpoint = self.rotation_endpoints[index]
+        index = self.rotation_endpoints.index(endpoint)
 
         try:
-            # Close socket
             sock = self.rotation_sockets[index]
             sock.close()
 
-            # Remove from lists
             del self.rotation_sockets[index]
             del self.rotation_endpoints[index]
-            self.rotation_endpoints_listbox.delete(index)
+            self.render_rotation_endpoints()
 
             self.log(f"Disconnected rotation data endpoint: {endpoint}")
             self.set_status("Idle")
@@ -554,6 +648,41 @@ class AdbControlApp:
         except Exception as e:
             messagebox.showerror("Rotation Data", f"Failed to disconnect: {e}")
             self.log(f"Failed to disconnect from {endpoint}: {e}")
+
+    def disconnect_all_rotation_endpoints(self):
+        """Disconnect all rotation endpoints"""
+        for endpoint in list(self.rotation_endpoints):
+            self.disconnect_rotation_endpoint(endpoint)
+
+    def render_rotation_endpoints(self):
+        """Render connected rotation endpoints with per-row disconnect buttons"""
+        for child in self.rotation_endpoints_frame.winfo_children():
+            child.destroy()
+
+        if not self.rotation_endpoints:
+            ttk.Label(self.rotation_endpoints_frame, text="No endpoints connected", style="TLabel").grid(column=0, row=0, padx=6, pady=4, sticky="w")
+            return
+
+        for idx, endpoint in enumerate(self.rotation_endpoints):
+            row = ttk.Frame(self.rotation_endpoints_frame, style="Surface.TFrame")
+            row.grid(column=0, row=idx, sticky="ew", pady=2)
+            self.rotation_endpoints_frame.rowconfigure(idx, weight=0)
+            self.rotation_endpoints_frame.columnconfigure(0, weight=1)
+
+            ttk.Label(row, text=endpoint, style="TLabel").grid(column=0, row=0, padx=(0, 6), sticky="w")
+            ttk.Button(row, text="Connect", style="Ghost.TButton", command=lambda ep=endpoint: self._reconnect_rotation_endpoint(ep)).grid(column=1, row=0, padx=4, sticky="ew")
+            ttk.Button(row, text="Disconnect", style="Ghost.TButton", command=lambda ep=endpoint: self.disconnect_rotation_endpoint(ep)).grid(column=2, row=0, padx=4, sticky="ew")
+
+            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, weight=0)
+            row.columnconfigure(2, weight=0)
+
+    def _reconnect_rotation_endpoint(self, endpoint: str):
+        """Attempt to reconnect an existing endpoint"""
+        # Disconnect first, then connect again
+        self.disconnect_rotation_endpoint(endpoint)
+        self.rotation_ip_var.set(endpoint)
+        self.connect_rotation_endpoint()
 
     def reboot_device(self, device: str):
         """Restart a single headset"""
@@ -633,6 +762,7 @@ class AdbControlApp:
         try:
             # Format: CSV format matching test_head_rotation_sender.py
             data_to_send = f"{yaw_deg:.2f}, {pitch_deg:.2f}, {roll_deg:.2f}, {timestamp:.6f}"
+            self.last_send_ts = time.time()
 
             # Send to all connected endpoints
             for sock in self.rotation_sockets:
@@ -678,6 +808,7 @@ class AdbControlApp:
                         self.rotation_data['pitch'] = pitch_deg
                         self.rotation_data['roll'] = roll_deg
                         self.data_status = 'OK'
+                        self.last_data_ts = time.time()
 
                         # Add to history
                         current_time = time.time()
@@ -723,7 +854,8 @@ class AdbControlApp:
                 rolls = list(self.angle_history['roll'])
 
             # Update status label
-            self.data_status_label.config(text=f"Status: {status} | {freq:.1f} Hz")
+                self.data_status_label.config(text=f"Status: {status} | {freq:.1f} Hz")
+                self.update_io_indicators(times)
 
             # Update gauges
             self.draw_gauge(self.yaw_canvas, yaw, -180, 180, "Yaw", "#0000FF")
@@ -759,6 +891,23 @@ class AdbControlApp:
         # Schedule next update (100ms)
         if self.running:
             self.root.after(100, self.update_data_display)
+
+    def update_io_indicators(self, times: list[float]):
+        now = time.time()
+        recv_recent = (now - self.last_data_ts) < 1.0 if self.last_data_ts else False
+        send_recent = (now - self.last_send_ts) < 1.0 if self.last_send_ts else False
+
+        if recv_recent:
+            self.recv_status_badge.config(text="Receive: active", style="BadgeGood.TLabel")
+        else:
+            self.recv_status_badge.config(text="Receive: idle", style="BadgeIdle.TLabel")
+
+        if self.rotation_sockets and send_recent:
+            self.send_status_badge.config(text=f"Send: {len(self.rotation_sockets)} target(s)", style="BadgeGood.TLabel")
+        elif self.rotation_sockets:
+            self.send_status_badge.config(text=f"Send: {len(self.rotation_sockets)} target(s)", style="BadgeWarn.TLabel")
+        else:
+            self.send_status_badge.config(text="Send: none", style="BadgeIdle.TLabel")
 
     def cleanup(self):
         """Cleanup resources before closing"""
