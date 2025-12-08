@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import math
 import zmq
+import re
 
 # Ensure xrobotoolkit_teleop is in the Python path
 script_dir = os.path.dirname(__file__)
@@ -62,6 +63,7 @@ class AdbControlApp:
         self.devices = []
         self.status_var = tk.StringVar(value="Idle")
         self.ip_var = tk.StringVar()
+        self.device_vars = {}
 
         # Head rotation data storage
         self.rotation_data = {'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0}
@@ -118,10 +120,11 @@ class AdbControlApp:
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
 
-        self.devices_list = tk.Listbox(frame, height=8, selectmode=tk.MULTIPLE, exportselection=False)
-        self.devices_list.grid(column=0, row=0, rowspan=4, padx=(8, 4), pady=8, sticky="nsew")
+        # Device rows with inline actions
+        self.devices_container = ttk.Frame(frame)
+        self.devices_container.grid(column=0, row=0, rowspan=5, padx=(8, 4), pady=8, sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(3, weight=1)
+        frame.rowconfigure(4, weight=1)
 
         refresh_btn = ttk.Button(frame, text="Refresh", command=self.refresh_devices)
         refresh_btn.grid(column=1, row=0, padx=4, pady=(8, 2), sticky="ew")
@@ -132,29 +135,32 @@ class AdbControlApp:
         connect_btn = ttk.Button(frame, text="Connect over IP", command=self.connect_ip)
         connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
 
+        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", command=self.auto_connect_wifi)
+        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 8), sticky="ew")
+
         self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground="green")
-        self.status_label.grid(column=0, row=4, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+        self.status_label.grid(column=0, row=5, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=5, columnspan=2, padx=8, pady=8, sticky="ew")
+        ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
-        ttk.Label(frame, text="IP:Port").grid(column=1, row=7, padx=4, pady=2, sticky="w")
+        ttk.Label(frame, text="IP:Port").grid(column=1, row=8, padx=4, pady=2, sticky="w")
         rotation_ip_entry = ttk.Entry(frame, textvariable=self.rotation_ip_var, width=18)
-        rotation_ip_entry.grid(column=1, row=8, padx=4, pady=2, sticky="ew")
+        rotation_ip_entry.grid(column=1, row=9, padx=4, pady=2, sticky="ew")
 
         rotation_connect_btn = ttk.Button(frame, text="Connect", command=self.connect_rotation_endpoint)
-        rotation_connect_btn.grid(column=1, row=9, padx=4, pady=(2, 4), sticky="ew")
+        rotation_connect_btn.grid(column=1, row=10, padx=4, pady=(2, 4), sticky="ew")
 
         # List of connected rotation endpoints
-        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=7, padx=8, pady=(0, 2), sticky="w")
+        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=8, padx=8, pady=(0, 2), sticky="w")
         self.rotation_endpoints_listbox = tk.Listbox(frame, height=3, selectmode=tk.SINGLE)
-        self.rotation_endpoints_listbox.grid(column=0, row=8, rowspan=2, padx=(8, 4), pady=2, sticky="nsew")
+        self.rotation_endpoints_listbox.grid(column=0, row=9, rowspan=2, padx=(8, 4), pady=2, sticky="nsew")
 
         disconnect_rotation_btn = ttk.Button(frame, text="Disconnect", command=self.disconnect_rotation_endpoint)
-        disconnect_rotation_btn.grid(column=0, row=10, padx=8, pady=(2, 8), sticky="ew")
+        disconnect_rotation_btn.grid(column=0, row=11, padx=8, pady=(2, 8), sticky="ew")
 
     def build_data_frame(self, parent: ttk.Frame):
         """Build the head rotation data display frame with gauges and history graph"""
@@ -295,18 +301,47 @@ class AdbControlApp:
         self.set_status("Refreshing devices...")
         devices = get_connected_adb_devices()
         self.devices = devices
-        self.devices_list.delete(0, tk.END)
-        for dev in devices:
-            self.devices_list.insert(tk.END, dev)
         if devices:
             self.set_status(f"Found {len(devices)} device(s)")
         else:
             self.set_status("No devices found")
+        self.render_device_rows()
+
+    def render_device_rows(self):
+        """Rebuild device list with inline action buttons"""
+        for child in self.devices_container.winfo_children():
+            child.destroy()
+        self.device_vars = {}
+
+        if not self.devices:
+            ttk.Label(self.devices_container, text="No devices connected").grid(column=0, row=0, padx=4, pady=2, sticky="w")
+            return
+
+        for idx, device in enumerate(self.devices):
+            row = ttk.Frame(self.devices_container)
+            row.grid(column=0, row=idx, sticky="ew", pady=2)
+            self.devices_container.rowconfigure(idx, weight=0)
+            self.devices_container.columnconfigure(0, weight=1)
+
+            var = tk.IntVar(value=0)
+            self.device_vars[device] = var
+            check = ttk.Checkbutton(row, text=device, variable=var)
+            check.grid(column=0, row=0, padx=(0, 6), sticky="w")
+
+            restart_btn = ttk.Button(row, text="Restart", command=lambda d=device: self.reboot_device(d))
+            restart_btn.grid(column=1, row=0, padx=4, sticky="ew")
+
+            power_btn = ttk.Button(row, text="Power Off", command=lambda d=device: self.power_off_device(d))
+            power_btn.grid(column=2, row=0, padx=4, sticky="ew")
+
+            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, weight=0)
+            row.columnconfigure(2, weight=0)
 
     def selected_devices(self):
-        indices = self.devices_list.curselection()
-        if indices:
-            return [self.devices[i] for i in indices]
+        selected = [dev for dev, var in self.device_vars.items() if var.get() == 1]
+        if selected:
+            return selected
         return self.devices[:1]  # Default to first device if none selected
 
     def connect_ip(self):
@@ -323,6 +358,66 @@ class AdbControlApp:
             self.set_status("Idle")
 
         threading.Thread(target=_connect, daemon=True).start()
+
+    def _get_device_ip(self, device: str) -> str | None:
+        """Try to fetch the Wi-Fi IP of a device via adb shell."""
+        cmds = [
+            f"adb -s {device} shell ip -f inet addr show wlan0",
+            f"adb -s {device} shell ip addr show wlan0",
+            f"adb -s {device} shell ip route",
+        ]
+
+        for cmd in cmds:
+            success, output = execute_adb_command(cmd)
+            if not success or not output:
+                continue
+            match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", output)
+            if match:
+                return match.group(1)
+        return None
+
+    def auto_connect_wifi(self):
+        """Switch selected USB device to TCPIP:5555 and connect over Wi-Fi."""
+        port = "5555"
+
+        def _run():
+            self.set_status("Preparing ADB over Wi-Fi...")
+            # Prefer explicitly selected USB device; fall back to first detected USB device.
+            usb_candidates = [d for d in self.selected_devices() if ":" not in d]
+            if not usb_candidates:
+                usb_candidates = [d for d in get_connected_adb_devices() if ":" not in d]
+
+            if not usb_candidates:
+                self.log("Wi-Fi connect: no USB-connected devices detected")
+                self.set_status("No USB device found")
+                return
+
+            device = usb_candidates[0]
+            ip_found = self._get_device_ip(device)
+            if not ip_found:
+                ip_fallback = self.ip_var.get().strip()
+                if not ip_fallback:
+                    self.log(f"Wi-Fi connect: failed to detect IP for {device}; enter IP manually.")
+                    self.set_status("IP not detected")
+                    return
+                ip_found = ip_fallback.split(":")[0]
+
+            target = f"{ip_found}:{port}"
+            self.log(f"Wi-Fi connect: {device} -> {target} (port {port})")
+
+            success_tcpip, output_tcpip = execute_adb_command(f"adb -s {device} tcpip {port}")
+            self.log(f"tcpip {port} on {device}: {'ok' if success_tcpip else 'failed'} | {output_tcpip.strip()}")
+            if not success_tcpip:
+                self.set_status("TCPIP failed")
+                self.refresh_devices()
+                return
+
+            success_conn, output_conn = execute_adb_command(f"adb connect {target}")
+            self.log(f"connect {target}: {'ok' if success_conn else 'failed'} | {output_conn.strip()}")
+            self.refresh_devices()
+            self.set_status("Idle")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def disconnect_all(self):
         def _disconnect():
@@ -397,6 +492,23 @@ class AdbControlApp:
         except Exception as e:
             messagebox.showerror("Rotation Data", f"Failed to disconnect: {e}")
             self.log(f"Failed to disconnect from {endpoint}: {e}")
+
+    def reboot_device(self, device: str):
+        """Restart a single headset"""
+        threading.Thread(target=self._run_device_command, args=(device, "reboot", f"adb -s {device} reboot"), daemon=True).start()
+
+    def power_off_device(self, device: str):
+        """Power off a single headset"""
+        threading.Thread(target=self._run_device_command, args=(device, "power off", f"adb -s {device} shell reboot -p"), daemon=True).start()
+
+    def _run_device_command(self, device: str, label: str, cmd: str):
+        """Execute a simple ADB command per device"""
+        self.set_status(f"{label} {device}")
+        try:
+            success, output = execute_adb_command(cmd)
+            self.log(f"[{device}] {label}: {'ok' if success else 'failed'} | {output.strip()}")
+        finally:
+            self.set_status("Idle")
 
     def stop_app(self):
         self.run_for_devices("stop app", self._stop_app_on_device)

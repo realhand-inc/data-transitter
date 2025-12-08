@@ -6,6 +6,7 @@ Goal: turn the existing `scripts/RH/adb_control_gui.py` and `scripts/RH/test_adb
 - Launch XRoboToolkit PC application and keep connectivity healthy.
 - Receive XR data and send data to the robot computer via configurable IP/port.
 - Provide ADB controls for two headsets (connect, start app, restart app) via UI buttons.
+- Automate ADB-over-WiFi: detect USB device, switch to `adb tcpip 5555`, prompt/auto-use last known IP, run `adb connect {ip}:5555`, and refresh device list (show both USB and WiFi entries).
 
 ## Section 2: Data Display
 - Show headset angle data (yaw, pitch, roll) with live updates.
@@ -38,3 +39,8 @@ Goal: turn the existing `scripts/RH/adb_control_gui.py` and `scripts/RH/test_adb
   - `POST /streams/stop` → stop ZMQ sockets and XR polling
   - `POST /shutdown` → stop streams, disconnect adb targets, close app
 - Logging: structured logs to `~/.realhand/logs/realhand.log` with rotation; optional `GET /logs/tail?lines=N` for debugging from automation.
+
+## Entrypoint (current)
+- Development launcher: `python application/run_realhand_app.py` (double-click friendly) which bootstraps `realhand_app.launcher` and runs `scripts/RH/adb_control_gui.py`.
+- Module entry: from repo root `PYTHONPATH=application/src python -m realhand_app` does the same import and call into `adb_control_gui.main()`.
+- Linux double-click: make `application/run_realhand_app.sh` executable (`chmod +x application/run_realhand_app.sh`) and double-click it in your file manager; it prefers `venv/bin/python` if present, otherwise falls back to `python3`. If the terminal closes immediately, ensure you are in a graphical session (DISPLAY set) or run from a terminal to see the printed error.
