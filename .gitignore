@@ -74,3 +74,14 @@ data/
 
 third_party/
 dependencies/
+
+# Node/React
+node_modules/
+*.tsbuildinfo
+.vite/
+dist/
+application/frontend/node_modules/
+application/frontend/dist/
+
+# Local envs
+application/backend/.venv/
