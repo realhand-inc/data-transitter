@@ -12,6 +12,8 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import math
 import zmq
 import re
+import base64
+import subprocess
 
 # Ensure xrobotoolkit_teleop is in the Python path
 script_dir = os.path.dirname(__file__)
@@ -92,6 +94,11 @@ class AdbControlApp:
         self.rotation_endpoints = []
         self.rotation_ip_var = tk.StringVar(value="192.168.1.56:5555")
 
+        # Screenshot viewer state
+        self.screenshot_window = None
+        self.screenshot_label = None
+        self.screenshot_image = None  # keep reference to avoid GC
+
         main = ttk.Frame(root, padding=12)
         main.grid(column=0, row=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
@@ -122,9 +129,9 @@ class AdbControlApp:
 
         # Device rows with inline actions
         self.devices_container = ttk.Frame(frame)
-        self.devices_container.grid(column=0, row=0, rowspan=5, padx=(8, 4), pady=8, sticky="nsew")
+        self.devices_container.grid(column=0, row=0, rowspan=6, padx=(8, 4), pady=8, sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(4, weight=1)
+        frame.rowconfigure(5, weight=1)
 
         refresh_btn = ttk.Button(frame, text="Refresh", command=self.refresh_devices)
         refresh_btn.grid(column=1, row=0, padx=4, pady=(8, 2), sticky="ew")
@@ -136,31 +143,34 @@ class AdbControlApp:
         connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
 
         wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", command=self.auto_connect_wifi)
-        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 8), sticky="ew")
+        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 4), sticky="ew")
+
+        screenshot_btn = ttk.Button(frame, text="Screenshot", command=self.capture_screenshot)
+        screenshot_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
 
         self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground="green")
-        self.status_label.grid(column=0, row=5, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+        self.status_label.grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
+        ttk.Separator(frame, orient='horizontal').grid(column=0, row=7, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
-        ttk.Label(frame, text="IP:Port").grid(column=1, row=8, padx=4, pady=2, sticky="w")
+        ttk.Label(frame, text="IP:Port").grid(column=1, row=9, padx=4, pady=2, sticky="w")
         rotation_ip_entry = ttk.Entry(frame, textvariable=self.rotation_ip_var, width=18)
-        rotation_ip_entry.grid(column=1, row=9, padx=4, pady=2, sticky="ew")
+        rotation_ip_entry.grid(column=1, row=10, padx=4, pady=2, sticky="ew")
 
         rotation_connect_btn = ttk.Button(frame, text="Connect", command=self.connect_rotation_endpoint)
-        rotation_connect_btn.grid(column=1, row=10, padx=4, pady=(2, 4), sticky="ew")
+        rotation_connect_btn.grid(column=1, row=11, padx=4, pady=(2, 4), sticky="ew")
 
         # List of connected rotation endpoints
-        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=8, padx=8, pady=(0, 2), sticky="w")
+        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=9, padx=8, pady=(0, 2), sticky="w")
         self.rotation_endpoints_listbox = tk.Listbox(frame, height=3, selectmode=tk.SINGLE)
-        self.rotation_endpoints_listbox.grid(column=0, row=9, rowspan=2, padx=(8, 4), pady=2, sticky="nsew")
+        self.rotation_endpoints_listbox.grid(column=0, row=10, rowspan=2, padx=(8, 4), pady=2, sticky="nsew")
 
         disconnect_rotation_btn = ttk.Button(frame, text="Disconnect", command=self.disconnect_rotation_endpoint)
-        disconnect_rotation_btn.grid(column=0, row=11, padx=8, pady=(2, 8), sticky="ew")
+        disconnect_rotation_btn.grid(column=0, row=12, padx=8, pady=(2, 8), sticky="ew")
 
     def build_data_frame(self, parent: ttk.Frame):
         """Build the head rotation data display frame with gauges and history graph"""
@@ -416,6 +426,58 @@ class AdbControlApp:
             self.log(f"connect {target}: {'ok' if success_conn else 'failed'} | {output_conn.strip()}")
             self.refresh_devices()
             self.set_status("Idle")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _ensure_screenshot_window(self):
+        """Create the screenshot viewer window if needed."""
+        if self.screenshot_window and self.screenshot_window.winfo_exists():
+            return
+        self.screenshot_window = tk.Toplevel(self.root)
+        self.screenshot_window.title("Headset Screenshot")
+        self.screenshot_label = ttk.Label(self.screenshot_window, text="Waiting for screenshot...")
+        self.screenshot_label.pack(padx=8, pady=8)
+
+    def capture_screenshot(self):
+        """Capture a screenshot from the selected device and display it."""
+        selected = self.selected_devices()
+        if not selected:
+            messagebox.showinfo("ADB Control", "Select a device before capturing a screenshot.")
+            return
+
+        device = selected[0]
+        self.set_status(f"Capturing screenshot from {device}...")
+
+        def _run():
+            try:
+                cmd = ["adb", "-s", device, "exec-out", "screencap", "-p"]
+                result = subprocess.run(cmd, capture_output=True, timeout=10)
+                if result.returncode != 0 or not result.stdout:
+                    msg = result.stderr.decode("utf-8", errors="ignore") if result.stderr else "No data"
+                    self.log(f"screenshot {device}: failed | {msg.strip()}")
+                    self.set_status("Screenshot failed")
+                    return
+
+                png_bytes = result.stdout
+                encoded = base64.b64encode(png_bytes).decode("ascii")
+
+                def _update_ui():
+                    self._ensure_screenshot_window()
+                    try:
+                        self.screenshot_image = tk.PhotoImage(data=encoded)
+                        self.screenshot_label.configure(image=self.screenshot_image, text="")
+                    except tk.TclError as e:
+                        self.log(f"screenshot display error: {e}")
+                        messagebox.showerror("Screenshot", f"Failed to display screenshot: {e}")
+                        self.set_status("Screenshot display failed")
+                        return
+                    self.set_status("Idle")
+                    self.log(f"screenshot {device}: ok")
+
+                self.root.after(0, _update_ui)
+            except Exception as e:
+                self.log(f"screenshot error: {e}")
+                self.set_status("Screenshot failed")
 
         threading.Thread(target=_run, daemon=True).start()
 

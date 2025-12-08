@@ -1,6 +1,6 @@
 # RealHand Desktop App Plan
 
-Goal: turn the existing `scripts/RH/adb_control_gui.py` and `scripts/RH/test_adb_simple.py` into an installable desktop app that users can download, install, and launch with a double-click.
+Goal: Develop a new, standalone desktop application that provides the functionality of the existing `scripts/RH/adb_control_gui.py` and `scripts/RH/test_adb_simple.py`. This new application will be installable and launchable with a double-click, eventually allowing for the deprecation and removal of the `scripts/RH` folder.
 
 ## Section 1: Features
 - Launch XRoboToolkit PC application and keep connectivity healthy.
@@ -22,7 +22,7 @@ Goal: turn the existing `scripts/RH/adb_control_gui.py` and `scripts/RH/test_adb
 - Modern, minimal B2B (clean layout, strong grouping, restrained color, no heavy visual flair).
 
 ## Technical Blueprint
-- Stack: Python 3.10+, existing Tkinter/ttk UI (can skin with ttkbootstrap for a cleaner B2B look), matplotlib for charts, pyzmq for transport, stdlib logging, and adb invoked via subprocess.
+- Stack: Python 3.10+, CustomTkinter (modern, rounded UI replacement for standard Tkinter), matplotlib for charts, pyzmq for transport, stdlib logging, and adb invoked via subprocess.
 - Packaging: PyInstaller per OS (one-folder for easier adb/xrt dependencies, optional onefile), with entrypoint `realhand_app/main.py` that wires GUI + background services; create platform-specific installers (.exe/.msi, .deb/.AppImage).
 - Layout: `application/src/realhand_app/` split into `ui/` (widgets/screens), `services/` (xr, adb, zmq, watchdog), `core/` (config, logging, utils), `api/` (local HTTP control).
 - Config: YAML in `~/.realhand/config.yaml` for robot IP/ports, ADB package name, default headset targets, log level; fall back to sane defaults and allow in-app editing.
