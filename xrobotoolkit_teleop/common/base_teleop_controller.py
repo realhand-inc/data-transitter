@@ -186,15 +186,36 @@ class BaseTeleopController(abc.ABC):
         self.placo_robot.update_kinematics()
 
         for src_name, config in self.manipulator_config.items():
-            xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
-            self.active[src_name] = xr_grip_val > 0.9
+            # Check if using hand tracking source
+            pose_source = config.get("pose_source", "")
+            is_hand_tracking = "hand_wrist" in pose_source
+
+            if is_hand_tracking:
+                # Hand tracking: always active (no grip button trigger)
+                self.active[src_name] = True
+            else:
+                # Controller: use grip button trigger (original behavior)
+                # Only access control_trigger if it exists in config
+                if "control_trigger" in config:
+                    xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
+                    self.active[src_name] = xr_grip_val > 0.9
+                else:
+                    # No trigger specified, always active
+                    self.active[src_name] = True
 
             if self.active[src_name]:
                 if self.ref_ee_xyz[src_name] is None:
                     print(f"{src_name} is activated.")
                     self.ref_ee_xyz[src_name], self.ref_ee_quat[src_name] = self._get_link_pose(config["link_name"])
 
+                # Get pose from XR device (controller or hand wrist)
                 xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+
+                # Handle None case (e.g., hand tracking quality too low)
+                if xr_pose is None:
+                    # Skip this iteration - robot freezes at last pose
+                    continue
+
                 delta_xyz, delta_rot = self._process_xr_pose(xr_pose, src_name)
                 
                 if self.effector_control_mode[src_name] == "position":
