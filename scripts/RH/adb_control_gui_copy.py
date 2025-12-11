@@ -15,6 +15,7 @@ import re
 import base64
 import subprocess
 import json
+from xrobotoolkit_teleop.utils.dex_hand_utils import pico_hand_state_to_mediapipe, pico_to_mediapipe
 
 # Ensure xrobotoolkit_teleop is in the Python path
 script_dir = os.path.dirname(__file__)
@@ -73,6 +74,7 @@ class AdbControlApp:
         # Head rotation data storage
         self.rotation_data = {'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0}
         self.raw_data_snapshot = {}  # Store full raw data
+        self.mediapipe_points = {"left": None, "right": None}
         self.data_status = 'INIT'
         self.data_frequency = 0.0
         self.frame_count = 0
@@ -142,6 +144,13 @@ class AdbControlApp:
         self.raw_data_tab.columnconfigure(0, weight=1)
         self.raw_data_tab.rowconfigure(0, weight=1)
 
+        # Tab 3: MediaPipe
+        self.mediapipe_tab = ttk.Frame(self.main_notebook, style="App.TFrame")
+        self.main_notebook.add(self.mediapipe_tab, text="MediaPipe")
+        self.mediapipe_tab.columnconfigure(0, weight=1)
+        self.mediapipe_tab.columnconfigure(1, weight=1)
+        self.mediapipe_tab.rowconfigure(0, weight=1)
+
         # Populate Dashboard
         self.build_devices_frame(self.dashboard_tab)
         self.build_visualizer_frame(self.dashboard_tab)
@@ -150,6 +159,8 @@ class AdbControlApp:
         
         # Populate Raw Data Tab
         self.build_raw_data_sheet(self.raw_data_tab)
+        # Populate MediaPipe Tab
+        self.build_mediapipe_tab(self.mediapipe_tab)
 
         self.refresh_devices()
         self.schedule_refresh()
@@ -994,11 +1005,14 @@ class AdbControlApp:
             try:
                 hand_state = self.xr_client.get_hand_tracking_state(prefix)
                 joints = []
+                joints_raw = None
                 is_active = 0
                 
                 if hand_state is not None:
+                    hand_state_arr = np.array(hand_state)
                     is_active = 1
-                    for j in hand_state:
+                    joints_raw = hand_state_arr.tolist()
+                    for j in hand_state_arr:
                         # each j is [x,y,z,qx,qy,qz,qw]
                         joints.append(fmt_pose(j))
                 else:
@@ -1009,19 +1023,35 @@ class AdbControlApp:
                     "isActive": is_active,
                     "scale": 1.0,
                     "timeStampNs": ts,
-                    "joints": joints
+                    "joints": joints,
+                    "joints_raw": joints_raw
                 }
             except Exception:
                 return {
                     "isActive": 0, "scale": 1.0,
                     "timeStampNs": ts,
-                    "joints": [fmt_pose(None)] * 26
+                    "joints": [fmt_pose(None)] * 26,
+                    "joints_raw": None
                 }
 
         data["leftHand"] = get_hand_info("left")
         data["rightHand"] = get_hand_info("right")
         
         return data
+
+    def mediapipe_from_raw(self, joints_raw):
+        """Convert raw PICO joints into MediaPipe-relative coordinates."""
+        if joints_raw is None:
+            return None
+        try:
+            arr = np.array(joints_raw, dtype=float)
+            required_len = max(pico_to_mediapipe.keys()) + 1
+            if arr.shape[0] < required_len:
+                pad = np.zeros((required_len - arr.shape[0], arr.shape[1]))
+                arr = np.concatenate([arr, pad], axis=0)
+            return pico_hand_state_to_mediapipe(arr)
+        except Exception:
+            return None
 
     def data_collection_worker(self):
         """Background worker for collecting head rotation data from XrClient"""
@@ -1075,8 +1105,12 @@ class AdbControlApp:
 
                 # 2. Collect Full Raw Data
                 full_data = self.collect_full_xr_data()
+                left_mp = self.mediapipe_from_raw(full_data.get("leftHand", {}).get("joints_raw"))
+                right_mp = self.mediapipe_from_raw(full_data.get("rightHand", {}).get("joints_raw"))
                 with self.data_lock:
                     self.raw_data_snapshot = full_data
+                    self.mediapipe_points["left"] = left_mp
+                    self.mediapipe_points["right"] = right_mp
 
                 # Sleep to maintain ~10Hz update rate
                 time.sleep(0.1)
@@ -1127,6 +1161,7 @@ class AdbControlApp:
             # Determine which view to update based on selected tab
             update_visualizer = (current_tab == str(self.dashboard_tab))
             update_raw_data = (current_tab == str(self.raw_data_tab))
+            update_mediapipe = (current_tab == str(self.mediapipe_tab))
 
             # Get current data with thread lock
             with self.data_lock:
@@ -1136,6 +1171,8 @@ class AdbControlApp:
                 status = self.data_status
                 freq = self.data_frequency
                 raw_snapshot = self.raw_data_snapshot.copy()
+                mp_left = np.array(self.mediapipe_points["left"]) if self.mediapipe_points.get("left") is not None else None
+                mp_right = np.array(self.mediapipe_points["right"]) if self.mediapipe_points.get("right") is not None else None
 
                 # Copy history for plotting (only if visualizer active)
                 if update_visualizer:
@@ -1178,6 +1215,10 @@ class AdbControlApp:
 
                     self.canvas.draw()
             
+            elif update_mediapipe:
+                self.update_mediapipe_table("left", mp_left)
+                self.update_mediapipe_table("right", mp_right)
+
             elif update_raw_data and raw_snapshot:
                 # Update Sheet Labels
                 
@@ -1234,6 +1275,67 @@ class AdbControlApp:
         # Schedule next update (100ms)
         if self.running:
             self.root.after(100, self.update_data_display)
+
+    def build_mediapipe_tab(self, parent: ttk.Frame):
+        """Display MediaPipe-converted hand keypoints for both hands."""
+        self.mediapipe_tables = {}
+
+        def build_table(col: int, title: str, key: str):
+            frame = ttk.LabelFrame(parent, text=title, style="Section.TLabelframe")
+            frame.grid(row=0, column=col, padx=8, pady=8, sticky="nsew")
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(0, weight=1)
+
+            columns = ("joint", "x", "y", "z")
+            tree = ttk.Treeview(frame, columns=columns, show="headings", height=22)
+            tree.heading("joint", text="Joint #")
+            tree.heading("x", text="X (rel)")
+            tree.heading("y", text="Y (rel)")
+            tree.heading("z", text="Z (rel)")
+            tree.column("joint", width=60, anchor="center")
+            tree.column("x", width=80, anchor="e")
+            tree.column("y", width=80, anchor="e")
+            tree.column("z", width=80, anchor="e")
+
+            vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+            tree.configure(yscrollcommand=vsb.set)
+            tree.grid(row=0, column=0, sticky="nsew")
+            vsb.grid(row=0, column=1, sticky="ns")
+
+            # Pre-populate rows
+            for idx in range(21):
+                tree.insert("", "end", iid=str(idx), values=(idx, "--", "--", "--"))
+
+            self.mediapipe_tables[key] = tree
+
+            note = ttk.Label(frame, text="Relative to wrist (MediaPipe coords)", style="TLabel")
+            note.grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=(4, 2))
+
+        build_table(0, "Left Hand (MediaPipe)", "left")
+        build_table(1, "Right Hand (MediaPipe)", "right")
+
+    def update_mediapipe_table(self, side: str, mp_data):
+        """Populate MediaPipe tables with converted hand data."""
+        tree = self.mediapipe_tables.get(side)
+        if not tree:
+            return
+
+        def set_row(idx, x_val, y_val, z_val):
+            tree.set(str(idx), column="x", value=x_val)
+            tree.set(str(idx), column="y", value=y_val)
+            tree.set(str(idx), column="z", value=z_val)
+
+        if mp_data is None or len(mp_data) == 0:
+            for i in range(21):
+                set_row(i, "--", "--", "--")
+            return
+
+        for i in range(21):
+            if i < len(mp_data):
+                x, y, z = mp_data[i]
+                set_row(i, f"{x:.3f}", f"{y:.3f}", f"{z:.3f}")
+            else:
+                set_row(i, "--", "--", "--")
 
     def cleanup(self):
         """Cleanup resources before closing"""
