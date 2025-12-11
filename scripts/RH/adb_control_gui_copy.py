@@ -2,7 +2,6 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, messagebox
-from tkinter import scrolledtext
 import numpy as np
 from collections import deque
 import sys
@@ -15,13 +14,18 @@ import re
 import base64
 import subprocess
 import json
-from xrobotoolkit_teleop.utils.dex_hand_utils import pico_hand_state_to_mediapipe, pico_to_mediapipe
-
-# Ensure xrobotoolkit_teleop is in the Python path
+# Ensure xrobotoolkit_teleop and local app are in the Python path
 script_dir = os.path.dirname(__file__)
 project_root = os.path.abspath(os.path.join(script_dir, os.pardir, os.pardir))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
+from xrobotoolkit_teleop.utils.dex_hand_utils import pico_hand_state_to_mediapipe, pico_to_mediapipe
+from app.tabs.dashboard_tab import DashboardTabMixin
+from app.tabs.raw_data_tab import RawDataTabMixin
+from app.tabs.mediapipe_tab import MediaPipeTabMixin
 
 from xrobotoolkit_teleop.common.xr_client import XrClient
 from test_adb_simple import ADB_PACKAGE_NAME, execute_adb_command, get_connected_adb_devices
@@ -60,7 +64,7 @@ def quaternion_to_euler(q: np.ndarray) -> np.ndarray:
     return np.array([yaw, pitch, roll])
 
 
-class AdbControlApp:
+class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("RealHand TeleOp")
@@ -74,7 +78,9 @@ class AdbControlApp:
         # Head rotation data storage
         self.rotation_data = {'yaw': 0.0, 'pitch': 0.0, 'roll': 0.0}
         self.raw_data_snapshot = {}  # Store full raw data
+        self.last_good_raw_snapshot = {}  # Persist last good raw data to freeze UI on loss
         self.mediapipe_points = {"left": None, "right": None}
+        self.last_good_mediapipe_points = {"left": None, "right": None}
         self.data_status = 'INIT'
         self.data_frequency = 0.0
         self.frame_count = 0
@@ -212,315 +218,6 @@ class AdbControlApp:
         style.configure("BadgeGood.TLabel", background="#d9f5d3", foreground="#14532d", padding=4, borderwidth=1, relief="solid")
         style.configure("BadgeWarn.TLabel", background="#fff4d6", foreground="#92400e", padding=4, borderwidth=1, relief="solid")
 
-    def build_devices_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Devices", style="Section.TLabelframe")
-        frame.grid(column=0, row=0, padx=8, pady=4, sticky="nsew")
-        parent.rowconfigure(0, weight=0)
-
-        # Device rows with inline actions
-        self.devices_container = ttk.Frame(frame, style="Surface.TFrame")
-        self.devices_container.grid(column=0, row=0, rowspan=6, padx=(8, 4), pady=8, sticky="nsew")
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(5, weight=1)
-
-        refresh_btn = ttk.Button(frame, text="Refresh", style="Accent.TButton", command=self.refresh_devices)
-        refresh_btn.grid(column=1, row=0, padx=4, pady=(8, 2), sticky="ew")
-
-        ttk.Label(frame, text="IP:Port").grid(column=1, row=1, padx=4, pady=2, sticky="w")
-        ip_entry = ttk.Entry(frame, textvariable=self.ip_var, width=18)
-        ip_entry.grid(column=1, row=2, padx=4, pady=2, sticky="ew")
-        connect_btn = ttk.Button(frame, text="Connect over IP", style="Ghost.TButton", command=self.connect_ip)
-        connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
-
-        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", style="Ghost.TButton", command=self.auto_connect_wifi)
-        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 4), sticky="ew")
-
-        screenshot_btn = ttk.Button(frame, text="Screenshot", style="Ghost.TButton", command=self.capture_screenshot)
-        screenshot_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
-
-        self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground=self.palette["accent"])
-        self.status_label.grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 8), sticky="w")
-
-        # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=7, columnspan=2, padx=8, pady=8, sticky="ew")
-
-        # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="w")
-
-        rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
-        rotation_entry_row.grid(column=0, row=9, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
-        rotation_entry_row.columnconfigure(0, weight=1)
-        rotation_entry_row.columnconfigure(1, weight=0)
-        rotation_entry_row.columnconfigure(2, weight=0)
-
-        rotation_ip_entry = ttk.Entry(rotation_entry_row, textvariable=self.rotation_ip_var, width=18)
-        rotation_ip_entry.grid(column=0, row=0, padx=(0, 6), pady=2, sticky="ew")
-
-        rotation_connect_btn = ttk.Button(rotation_entry_row, text="Connect", style="Ghost.TButton", command=self.connect_rotation_endpoint)
-        rotation_connect_btn.grid(column=1, row=0, padx=4, pady=2, sticky="ew")
-
-        rotation_disconnect_btn = ttk.Button(rotation_entry_row, text="Disconnect All", style="Ghost.TButton", command=self.disconnect_all_rotation_endpoints)
-        rotation_disconnect_btn.grid(column=2, row=0, padx=4, pady=2, sticky="ew")
-
-        # List of connected rotation endpoints
-        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=10, padx=8, pady=(0, 2), sticky="w")
-        self.rotation_endpoints_frame = ttk.Frame(frame, style="Surface.TFrame")
-        self.rotation_endpoints_frame.grid(column=0, row=11, columnspan=2, padx=8, pady=2, sticky="nsew")
-        frame.rowconfigure(11, weight=1)
-        self.render_rotation_endpoints()
-
-    def build_visualizer_frame(self, parent: ttk.Frame):
-        """Build the dashboard visualizer (Gauges + Graph)"""
-        frame = ttk.LabelFrame(parent, text="Head Rotation Visualizer", style="Section.TLabelframe")
-        frame.grid(column=0, row=1, padx=8, pady=4, sticky="nsew")
-        parent.rowconfigure(1, weight=1)
-        
-        frame.columnconfigure(0, weight=0) # Gauges
-        frame.columnconfigure(1, weight=1) # Graph
-        frame.rowconfigure(0, weight=1)
-
-        # Left side: Gauges section
-        gauges_frame = ttk.Frame(frame)
-        gauges_frame.grid(column=0, row=0, padx=8, pady=8, sticky="nsew")
-
-        # Status label
-        self.data_status_label = ttk.Label(gauges_frame, text="Status: INIT | 0.0 Hz", font=("TkDefaultFont", 10))
-        self.data_status_label.grid(column=0, row=0, columnspan=3, padx=4, pady=(0, 8))
-        status_row = ttk.Frame(gauges_frame)
-        status_row.grid(column=0, row=1, columnspan=3, padx=4, pady=(0, 8), sticky="w")
-        self.recv_status_badge = ttk.Label(status_row, text="Receive: idle", style="BadgeIdle.TLabel")
-        self.recv_status_badge.grid(column=0, row=0, padx=(0, 6))
-        self.send_status_badge = ttk.Label(status_row, text="Send: idle", style="BadgeIdle.TLabel")
-        self.send_status_badge.grid(column=1, row=0, padx=(0, 6))
-
-        # Create three canvas widgets for gauges
-        gauge_size = 120
-        self.yaw_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
-        self.yaw_canvas.grid(column=0, row=2, padx=8, pady=4)
-
-        self.pitch_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
-        self.pitch_canvas.grid(column=1, row=2, padx=8, pady=4)
-
-        self.roll_canvas = tk.Canvas(gauges_frame, width=gauge_size, height=gauge_size + 40, bg=self.palette["panel"], highlightthickness=1, highlightbackground="#d7deea")
-        self.roll_canvas.grid(column=2, row=2, padx=8, pady=4)
-
-        # Draw initial gauges
-        self.draw_gauge(self.yaw_canvas, 0, -180, 180, "Yaw", "#0000FF")
-        self.draw_gauge(self.pitch_canvas, 0, -90, 90, "Pitch", "#009600")
-        self.draw_gauge(self.roll_canvas, 0, -90, 90, "Roll", "#C80000")
-
-        # Right side: History graph
-        history_frame = ttk.Frame(frame)
-        history_frame.grid(column=1, row=0, padx=8, pady=8, sticky="nsew")
-
-        # Create matplotlib figure
-        self.fig = Figure(figsize=(8, 3), dpi=80)
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_title("Angle History (Last 10 seconds)")
-        self.ax.set_xlabel("Time (s)")
-        self.ax.set_ylabel("Angle (degrees)")
-        self.ax.grid(True, alpha=0.3)
-        self.ax.set_ylim(-180, 180)
-
-        # Embed matplotlib figure in tkinter
-        self.canvas = FigureCanvasTkAgg(self.fig, master=history_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
-    def build_raw_data_sheet(self, parent: ttk.Frame):
-        """Build a spreadsheet-like grid for raw data"""
-        self.sheet_cells = {}
-        
-        # Create Scrollable Canvas
-        canvas = tk.Canvas(parent, bg=self.palette["bg"], highlightthickness=0)
-        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
-        scrollable_frame = ttk.Frame(canvas, style="App.TFrame")
-
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-        )
-
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-        canvas.configure(yscrollcommand=scrollbar.set)
-        
-        # Mousewheel scrolling
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # Linux Support
-        canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-        canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-
-        canvas.grid(column=0, row=0, sticky="nsew")
-        scrollbar.grid(column=1, row=0, sticky="ns")
-        parent.columnconfigure(0, weight=1)
-        parent.rowconfigure(0, weight=1)
-
-        # --- Spreadsheet Construction ---
-        
-        # Helper for creating cells
-        def make_header(p, text, r, c, w=20):
-            lbl = ttk.Label(p, text=text, style="SheetHeader.TLabel", width=w, anchor="center")
-            lbl.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
-            return lbl
-            
-        def make_label(p, text, r, c, w=20):
-            lbl = ttk.Label(p, text=text, style="SheetLabel.TLabel", width=w, anchor="e")
-            lbl.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
-            return lbl
-
-        def make_value(p, key, r, c, w=40):
-            lbl = ttk.Label(p, text="0", style="SheetCell.TLabel", width=w, anchor="w")
-            lbl.grid(row=r, column=c, sticky="nsew", padx=1, pady=1)
-            self.sheet_cells[key] = lbl
-            return lbl
-
-        # SECTION 1: Headset & System (Row 0)
-        sec1 = ttk.LabelFrame(scrollable_frame, text="Headset System", style="Section.TLabelframe")
-        sec1.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
-        
-        make_header(sec1, "Property", 0, 0)
-        make_header(sec1, "Value", 0, 1, w=60)
-        
-        make_label(sec1, "Pose", 1, 0)
-        make_value(sec1, "headset_pose", 1, 1)
-        
-        make_label(sec1, "Status", 2, 0)
-        make_value(sec1, "headset_status", 2, 1)
-        
-        make_label(sec1, "Timestamp", 3, 0)
-        make_value(sec1, "headset_time", 3, 1)
-
-
-        # SECTION 2: Controllers (Row 1)
-        sec2 = ttk.LabelFrame(scrollable_frame, text="Controllers", style="Section.TLabelframe")
-        sec2.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
-        
-        make_header(sec2, "Property", 0, 0)
-        make_header(sec2, "Left Controller", 0, 1, w=45)
-        make_header(sec2, "Right Controller", 0, 2, w=45)
-        
-        rows = ["Pose", "Axis (X,Y)", "Trigger / Grip", "Buttons"]
-        keys = ["c_pose", "c_axis", "c_trigger", "c_buttons"]
-        
-        for i, (label, key_suffix) in enumerate(zip(rows, keys)):
-            r = i + 1
-            make_label(sec2, label, r, 0)
-            make_value(sec2, f"left_{key_suffix}", r, 1, w=45)
-            make_value(sec2, f"right_{key_suffix}", r, 2, w=45)
-
-
-        # SECTION 3: Hands Summary (Row 2)
-        sec3 = ttk.LabelFrame(scrollable_frame, text="Hands Summary", style="Section.TLabelframe")
-        sec3.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
-        
-        make_header(sec3, "Property", 0, 0)
-        make_header(sec3, "Left Hand", 0, 1, w=45)
-        make_header(sec3, "Right Hand", 0, 2, w=45)
-        
-        make_label(sec3, "Active", 1, 0)
-        make_value(sec3, "left_h_active", 1, 1, w=45)
-        make_value(sec3, "right_h_active", 1, 2, w=45)
-        
-        make_label(sec3, "Scale", 2, 0)
-        make_value(sec3, "left_h_scale", 2, 1, w=45)
-        make_value(sec3, "right_h_scale", 2, 2, w=45)
-
-
-        # SECTION 4: Hand Joints (Row 3) - The Big Table
-        sec4 = ttk.LabelFrame(scrollable_frame, text="Hand Joints (26)", style="Section.TLabelframe")
-        sec4.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8, pady=4)
-        
-        make_header(sec4, "Joint ID", 0, 0, w=10)
-        make_header(sec4, "Left Hand Pose (x,y,z,qx,qy,qz,qw)", 0, 1, w=60)
-        make_header(sec4, "Right Hand Pose (x,y,z,qx,qy,qz,qw)", 0, 2, w=60)
-        
-        for i in range(26):
-            r = i + 1
-            make_label(sec4, f"Joint {i}", r, 0, w=10)
-            make_value(sec4, f"joint_{i}_left", r, 1, w=60)
-            make_value(sec4, f"joint_{i}_right", r, 2, w=60)
-
-
-    def draw_gauge(self, canvas: tk.Canvas, angle: float, min_angle: float, max_angle: float, label: str, color: str):
-        """Draw a circular gauge on the canvas"""
-        canvas.delete("all")
-
-        width = int(canvas.cget("width"))
-        height = int(canvas.cget("height"))
-        center_x = width // 2
-        center_y = (height - 40) // 2
-        radius = min(center_x, center_y) - 10
-
-        # Draw outer circle
-        canvas.create_oval(center_x - radius, center_y - radius,
-                          center_x + radius, center_y + radius,
-                          outline='#d0d7e4', width=2)
-
-        # Draw tick marks every 30 degrees
-        for mark_angle in range(int(min_angle), int(max_angle) + 1, 30):
-            # Convert angle to gauge position (bottom = min, top = max)
-            gauge_angle = -180 + (mark_angle - min_angle) / (max_angle - min_angle) * 180
-            rad = math.radians(gauge_angle)
-
-            outer_x = center_x + int((radius - 5) * math.cos(rad))
-            outer_y = center_y + int((radius - 5) * math.sin(rad))
-            inner_x = center_x + int((radius - 15) * math.cos(rad))
-            inner_y = center_y + int((radius - 15) * math.sin(rad))
-
-            canvas.create_line(outer_x, outer_y, inner_x, inner_y, fill='#d0d7e4', width=2)
-
-        # Draw needle
-        gauge_angle = -180 + (angle - min_angle) / (max_angle - min_angle) * 180
-        rad = math.radians(gauge_angle)
-
-        needle_x = center_x + int((radius - 20) * math.cos(rad))
-        needle_y = center_y + int((radius - 20) * math.sin(rad))
-
-        canvas.create_line(center_x, center_y, needle_x, needle_y, fill=color, width=3)
-        canvas.create_oval(center_x - 6, center_y - 6, center_x + 6, center_y + 6, fill=color, outline=color)
-
-        # Draw label
-        canvas.create_text(center_x, height - 30, text=label, font=("TkDefaultFont", 10, "bold"), fill=self.palette["text"])
-
-        # Draw value
-        canvas.create_text(center_x, height - 10, text=f"{angle:.1f}°", font=("TkDefaultFont", 9), fill=self.palette["muted"])
-
-    def build_actions_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Actions", style="Section.TLabelframe")
-        frame.grid(column=0, row=2, padx=8, pady=4, sticky="ew")
-
-        start_btn = ttk.Button(frame, text="Start", style="Ghost.TButton", command=self.restart_app)
-        start_btn.grid(column=0, row=0, padx=6, pady=6, sticky="ew")
-
-        stop_btn = ttk.Button(frame, text="Stop", style="Accent.TButton", command=self.stop_app)
-        stop_btn.grid(column=1, row=0, padx=6, pady=6, sticky="ew")
-
-        frame.columnconfigure(0, weight=1)
-        frame.columnconfigure(1, weight=1)
-
-    def build_log_frame(self, parent: ttk.Frame):
-        frame = ttk.LabelFrame(parent, text="Log", style="Section.TLabelframe")
-        frame.grid(column=0, row=3, padx=8, pady=4, sticky="nsew")
-        parent.rowconfigure(3, weight=1)
-
-        self.log_widget = scrolledtext.ScrolledText(
-            frame,
-            wrap=tk.WORD,
-            height=10,
-            state="disabled",
-            background="#f5f7fb",
-            foreground=self.palette["text"],
-            insertbackground=self.palette["text"],
-            borderwidth=0
-        )
-        self.log_widget.grid(column=0, row=0, padx=8, pady=8, sticky="nsew")
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(0, weight=1)
-
-        self.log_frame = frame
-        self.hide_log_frame()
-
     def schedule_refresh(self):
         self.root.after(DEVICE_REFRESH_MS, self.periodic_refresh)
 
@@ -534,31 +231,13 @@ class AdbControlApp:
     def log(self, message: str):
         timestamp = time.strftime("%H:%M:%S")
         def _append():
-            self.log_widget.configure(state="normal")
-            self.log_widget.insert(tk.END, f"[{timestamp}] {message}\n")
-            self.log_widget.see(tk.END)
-            self.log_widget.configure(state="disabled")
+            if not hasattr(self, "log_text"):
+                return
+            self.log_text.configure(state="normal")
+            self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+            self.log_text.see(tk.END)
+            self.log_text.configure(state="disabled")
         self.root.after(0, _append)
-
-    def toggle_log_frame(self):
-        if self.log_visible:
-            self.hide_log_frame()
-        else:
-            self.show_log_frame()
-
-    def hide_log_frame(self):
-        if hasattr(self, "log_frame"):
-            self.log_frame.grid_remove()
-            self.log_visible = False
-            if hasattr(self, "log_toggle_btn"):
-                self.log_toggle_btn.configure(text="Show Logs")
-
-    def show_log_frame(self):
-        if hasattr(self, "log_frame"):
-            self.log_frame.grid()
-            self.log_visible = True
-            if hasattr(self, "log_toggle_btn"):
-                self.log_toggle_btn.configure(text="Hide Logs")
 
     def refresh_devices(self):
         self.set_status("Refreshing devices...")
@@ -868,6 +547,9 @@ class AdbControlApp:
     def restart_app(self):
         self.run_for_devices("restart app", self._restart_app_on_device)
 
+    def open_app(self):
+        self.run_for_devices("open app", self._open_app_on_device)
+
     def run_for_devices(self, label: str, action):
         devices = self.selected_devices()
         if not devices:
@@ -1109,8 +791,14 @@ class AdbControlApp:
                 right_mp = self.mediapipe_from_raw(full_data.get("rightHand", {}).get("joints_raw"))
                 with self.data_lock:
                     self.raw_data_snapshot = full_data
+                    if self.data_status == 'OK' and full_data:
+                        self.last_good_raw_snapshot = full_data
                     self.mediapipe_points["left"] = left_mp
                     self.mediapipe_points["right"] = right_mp
+                    if left_mp is not None:
+                        self.last_good_mediapipe_points["left"] = left_mp
+                    if right_mp is not None:
+                        self.last_good_mediapipe_points["right"] = right_mp
 
                 # Sleep to maintain ~10Hz update rate
                 time.sleep(0.1)
@@ -1171,8 +859,11 @@ class AdbControlApp:
                 status = self.data_status
                 freq = self.data_frequency
                 raw_snapshot = self.raw_data_snapshot.copy()
+                last_good_snapshot = self.last_good_raw_snapshot.copy() if self.last_good_raw_snapshot else {}
                 mp_left = np.array(self.mediapipe_points["left"]) if self.mediapipe_points.get("left") is not None else None
                 mp_right = np.array(self.mediapipe_points["right"]) if self.mediapipe_points.get("right") is not None else None
+                mp_left_last = np.array(self.last_good_mediapipe_points["left"]) if self.last_good_mediapipe_points.get("left") is not None else None
+                mp_right_last = np.array(self.last_good_mediapipe_points["right"]) if self.last_good_mediapipe_points.get("right") is not None else None
 
                 # Copy history for plotting (only if visualizer active)
                 if update_visualizer:
@@ -1188,11 +879,6 @@ class AdbControlApp:
             self.update_io_indicators(times if update_visualizer else []) # Pass empty if not visualizing history
 
             if update_visualizer:
-                # Update gauges
-                self.draw_gauge(self.yaw_canvas, yaw, -180, 180, "Yaw", "#0000FF")
-                self.draw_gauge(self.pitch_canvas, pitch, -90, 90, "Pitch", "#009600")
-                self.draw_gauge(self.roll_canvas, roll, -90, 90, "Roll", "#C80000")
-
                 # Update history graph
                 if len(times) > 1:
                     self.ax.clear()
@@ -1216,14 +902,29 @@ class AdbControlApp:
                     self.canvas.draw()
             
             elif update_mediapipe:
-                self.update_mediapipe_table("left", mp_left)
-                self.update_mediapipe_table("right", mp_right)
+                now = time.time()
+                stale = self.last_data_ts and (now - self.last_data_ts > 1.0)
+                mp_left_disp = mp_left if (mp_left is not None and not stale and status == 'OK') else (mp_left_last if mp_left_last is not None else mp_left)
+                mp_right_disp = mp_right if (mp_right is not None and not stale and status == 'OK') else (mp_right_last if mp_right_last is not None else mp_right)
+                self.update_mediapipe_table("left", mp_left_disp)
+                self.update_mediapipe_table("right", mp_right_disp)
 
-            elif update_raw_data and raw_snapshot:
+            elif update_raw_data:
+                # Freeze display to last good snapshot if data is lost/stale
+                display_snapshot = raw_snapshot
+                now = time.time()
+                stale = self.last_data_ts and (now - self.last_data_ts > 1.0)
+                if (not display_snapshot) or status != 'OK' or stale:
+                    if last_good_snapshot:
+                        display_snapshot = last_good_snapshot
+
+                if not display_snapshot:
+                    return
+
                 # Update Sheet Labels
                 
                 # 1. Headset
-                hs = raw_snapshot.get("headset", {})
+                hs = display_snapshot.get("headset", {})
                 self.sheet_cells["headset_pose"].configure(text=hs.get("pose", "0"))
                 self.sheet_cells["headset_status"].configure(text=str(hs.get("status", "0")))
                 self.sheet_cells["headset_time"].configure(text=str(hs.get("timeStampNs", "0")))
@@ -1232,7 +933,7 @@ class AdbControlApp:
                 for side in ["Left", "Right"]:
                     key = side.lower()
                     c_key = f"{key}Controller"
-                    c_data = raw_snapshot.get(c_key, {})
+                    c_data = display_snapshot.get(c_key, {})
                     
                     self.sheet_cells[f"{key}_c_pose"].configure(text=c_data.get("pose", "0"))
                     self.sheet_cells[f"{key}_c_axis"].configure(text=f"{c_data.get('axisX',0):.2f}, {c_data.get('axisY',0):.2f}")
@@ -1249,15 +950,15 @@ class AdbControlApp:
                 for side in ["Left", "Right"]:
                     key = side.lower()
                     h_key = f"{key}Hand"
-                    h_data = raw_snapshot.get(h_key, {})
+                    h_data = display_snapshot.get(h_key, {})
                     
                     self.sheet_cells[f"{key}_h_active"].configure(text="Yes" if h_data.get("isActive") else "No")
                     self.sheet_cells[f"{key}_h_scale"].configure(text=f"{h_data.get('scale', 1.0):.2f}")
                     
                 # 4. Hand Joints
                 # We need to loop carefully. 26 rows.
-                left_h = raw_snapshot.get("leftHand", {}).get("joints", [])
-                right_h = raw_snapshot.get("rightHand", {}).get("joints", [])
+                left_h = display_snapshot.get("leftHand", {}).get("joints", [])
+                right_h = display_snapshot.get("rightHand", {}).get("joints", [])
                 
                 for i in range(26):
                     # Left
@@ -1275,67 +976,6 @@ class AdbControlApp:
         # Schedule next update (100ms)
         if self.running:
             self.root.after(100, self.update_data_display)
-
-    def build_mediapipe_tab(self, parent: ttk.Frame):
-        """Display MediaPipe-converted hand keypoints for both hands."""
-        self.mediapipe_tables = {}
-
-        def build_table(col: int, title: str, key: str):
-            frame = ttk.LabelFrame(parent, text=title, style="Section.TLabelframe")
-            frame.grid(row=0, column=col, padx=8, pady=8, sticky="nsew")
-            frame.columnconfigure(0, weight=1)
-            frame.rowconfigure(0, weight=1)
-
-            columns = ("joint", "x", "y", "z")
-            tree = ttk.Treeview(frame, columns=columns, show="headings", height=22)
-            tree.heading("joint", text="Joint #")
-            tree.heading("x", text="X (rel)")
-            tree.heading("y", text="Y (rel)")
-            tree.heading("z", text="Z (rel)")
-            tree.column("joint", width=60, anchor="center")
-            tree.column("x", width=80, anchor="e")
-            tree.column("y", width=80, anchor="e")
-            tree.column("z", width=80, anchor="e")
-
-            vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-            tree.configure(yscrollcommand=vsb.set)
-            tree.grid(row=0, column=0, sticky="nsew")
-            vsb.grid(row=0, column=1, sticky="ns")
-
-            # Pre-populate rows
-            for idx in range(21):
-                tree.insert("", "end", iid=str(idx), values=(idx, "--", "--", "--"))
-
-            self.mediapipe_tables[key] = tree
-
-            note = ttk.Label(frame, text="Relative to wrist (MediaPipe coords)", style="TLabel")
-            note.grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=(4, 2))
-
-        build_table(0, "Left Hand (MediaPipe)", "left")
-        build_table(1, "Right Hand (MediaPipe)", "right")
-
-    def update_mediapipe_table(self, side: str, mp_data):
-        """Populate MediaPipe tables with converted hand data."""
-        tree = self.mediapipe_tables.get(side)
-        if not tree:
-            return
-
-        def set_row(idx, x_val, y_val, z_val):
-            tree.set(str(idx), column="x", value=x_val)
-            tree.set(str(idx), column="y", value=y_val)
-            tree.set(str(idx), column="z", value=z_val)
-
-        if mp_data is None or len(mp_data) == 0:
-            for i in range(21):
-                set_row(i, "--", "--", "--")
-            return
-
-        for i in range(21):
-            if i < len(mp_data):
-                x, y, z = mp_data[i]
-                set_row(i, f"{x:.3f}", f"{y:.3f}", f"{z:.3f}")
-            else:
-                set_row(i, "--", "--", "--")
 
     def cleanup(self):
         """Cleanup resources before closing"""
