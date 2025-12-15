@@ -72,6 +72,26 @@ class DashboardTabMixin:
 
         self.render_rotation_endpoints()
 
+        # MediaPipe Hand Data Broadcasting section
+        ttk.Label(frame, text="MediaPipe Hand Data Broadcasting", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=12, columnspan=2, padx=8, pady=(12, 4), sticky="w")
+
+        hand_entry_row = ttk.Frame(frame, style="Surface.TFrame")
+        hand_entry_row.grid(column=0, row=13, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        hand_entry_row.columnconfigure(0, weight=1)
+        hand_entry_row.columnconfigure(1, weight=0)
+
+        hand_ip_entry = ttk.Entry(hand_entry_row, textvariable=self.hand_data_ip_var, width=18)
+        hand_ip_entry.grid(column=0, row=0, padx=(0, 6), pady=2, sticky="ew")
+
+        hand_connect_btn = ttk.Button(hand_entry_row, text="Connect", style="Ghost.TButton", command=self.connect_hand_data_endpoint)
+        hand_connect_btn.grid(column=1, row=0, padx=4, pady=2, sticky="ew")
+
+        # List of connected hand data endpoints
+        self.hand_endpoints_frame = ttk.Frame(frame, style="Surface.TFrame")
+        self.hand_endpoints_frame.grid(column=0, row=14, columnspan=2, padx=8, pady=2, sticky="nsew")
+
+        self.render_hand_data_endpoints()
+
     def build_visualizer_frame(self, parent: ttk.Frame):
         """Build the dashboard visualizer (Gauges + Graph)."""
         frame = ttk.LabelFrame(parent, text="Head Rotation Visualizer", style="Section.TLabelframe")

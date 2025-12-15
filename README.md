@@ -41,14 +41,7 @@ sudo apt install -y cmake python3-pip python-is-python3 python3.12-venv
 sudo apt install -y git
 ```
 
-### Step 2: Clone the Repository
-
-```bash
-git clone https://github.com/XR-Robotics/XRoboToolkit-Teleop-Sample-Python.git
-cd XRoboToolkit-Teleop-Sample-Python
-```
-
-### Step 3: Install Project Dependencies
+### Step 2: Install Project Dependencies
 
 **Note:** The setup scripts are currently only tested on Ubuntu 22.04 and 24.04.
 
@@ -64,7 +57,7 @@ If installing on system python (or in an existing virtual environment):
 bash setup.sh --install
 ```
 
-### Step 4: Download XRoboToolkit PC Service
+### Step 3: Download XRoboToolkit PC Service
 
 1.  Download XRoboToolkit PC Service from the official website
 2.  Install and run the service before running any demos
@@ -85,6 +78,59 @@ conda activate xr-robotics
 ```bash
 source venv/bin/activate
 ```
+
+### ADB Control GUI for VR Headsets
+
+This GUI application provides a comprehensive control interface for managing VR headsets (like PICO 4) via ADB (Android Debug Bridge). It combines device management with real-time head rotation data capture and transmission.
+
+**Prerequisites:**
+1.  **Complete project installation** (Steps 1-3 above) - The script requires numpy, matplotlib, pyzmq, and xrobotoolkit_teleop
+
+2.  **Install ADB (Android Debug Bridge):**
+    ```bash
+    sudo apt install android-tools-adb android-tools-fastboot
+    ```
+
+3.  **XRoboToolkit PC Service** must be running (for head rotation tracking)
+
+4.  **Connect your VR headset:**
+    -   Via USB cable, or
+    -   Via WiFi (the GUI provides tools to set this up)
+
+5.  **Enable Developer Mode on your headset:**
+    -   Follow your headset manufacturer's instructions to enable USB debugging
+
+**Running the GUI:**
+```bash
+# Activate your environment (required)
+conda activate xr-robotics  # or: source venv/bin/activate
+
+# Run the ADB Control GUI
+python scripts/RH/adb_control_gui.py
+```
+
+**Features:**
+-   **Device Management**: Detect, connect, and manage multiple ADB devices
+-   **WiFi Connection**: Convert USB connections to WiFi for wireless operation
+-   **Head Rotation Tracking**: Real-time head rotation data (yaw, pitch, roll) with visual gauges
+-   **ZMQ Data Streaming**: Send rotation data to remote endpoints for robot control
+-   **Screenshot Capture**: Take and view screenshots from connected headsets
+-   **App Control**: Start/stop the XRoboToolkit app on connected devices
+
+**First-Time Usage:**
+1.  Connect your VR headset via USB
+2.  Launch the GUI - devices should auto-detect
+3.  (Optional) Click "USB→WiFi" to enable wireless connection
+4.  Configure rotation data endpoints (IP:Port format, e.g., `192.168.1.56:5555`)
+5.  Click "Connect" to start sending head rotation data to your robot/receiver
+
+**Requirements:**
+-   ADB installed and accessible in PATH
+-   XRoboToolkit PC Service running
+-   VR headset with USB debugging enabled
+-   Active conda/venv environment with project dependencies
+
+---
 
 ### Main Demo: Head Rotation Sender
 
@@ -650,6 +696,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ```bash
 # Activate environment
 source venv/bin/activate          # or: conda activate xr-robotics
+
+# Run ADB Control GUI (VR Headset Management)
+python scripts/RH/adb_control_gui.py
 
 # Run Head Rotation Sender (Main Demo)
 python scripts/RH/test_head_rotation_sender.py

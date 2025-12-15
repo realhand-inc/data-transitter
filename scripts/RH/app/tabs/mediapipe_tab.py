@@ -7,10 +7,20 @@ class MediaPipeTabMixin:
     def build_mediapipe_tab(self, parent: ttk.Frame):
         """Display MediaPipe-converted hand keypoints for both hands."""
         self.mediapipe_tables = {}
+        status_row = ttk.Frame(parent)
+        status_row.grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4), sticky="ew")
+        status_row.columnconfigure(0, weight=1)
+        status_row.columnconfigure(1, weight=0)
+
+        self.mediapipe_target_label = ttk.Label(status_row, text="Targets: none", style="TLabel")
+        self.mediapipe_target_label.grid(column=0, row=0, sticky="w")
+
+        self.mediapipe_send_badge = ttk.Label(status_row, text="Send: idle", style="BadgeIdle.TLabel")
+        self.mediapipe_send_badge.grid(column=1, row=0, sticky="e")
 
         def build_table(col: int, title: str, key: str):
             frame = ttk.LabelFrame(parent, text=title, style="Section.TLabelframe")
-            frame.grid(row=0, column=col, padx=8, pady=8, sticky="nsew")
+            frame.grid(row=1, column=col, padx=8, pady=8, sticky="nsew")
             frame.columnconfigure(0, weight=1)
             frame.rowconfigure(0, weight=1)
 
@@ -41,7 +51,8 @@ class MediaPipeTabMixin:
 
         parent.columnconfigure(0, weight=1)
         parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(0, weight=1)
+        parent.rowconfigure(0, weight=0)
+        parent.rowconfigure(1, weight=1)
 
         build_table(0, "Left Hand (MediaPipe)", "left")
         build_table(1, "Right Hand (MediaPipe)", "right")
@@ -68,3 +79,31 @@ class MediaPipeTabMixin:
                 set_row(i, f"{x:.3f}", f"{y:.3f}", f"{z:.3f}")
             else:
                 set_row(i, "--", "--", "--")
+
+    def update_mediapipe_send_badge(self, active: bool, stale: bool, endpoints=None):
+        """Update send-status badge and target list for MediaPipe tab."""
+        if not hasattr(self, "mediapipe_send_badge"):
+            return
+
+        targets = endpoints if endpoints is not None else []
+        targets_text = ", ".join(targets) if targets else "none"
+        if hasattr(self, "mediapipe_target_label"):
+            self.mediapipe_target_label.configure(text=f"Targets: {targets_text}")
+
+        if active:
+            style = "BadgeGood.TLabel"
+            text = "Send: active"
+        elif stale:
+            style = "BadgeWarn.TLabel"
+            text = "Send: stale"
+        else:
+            style = "BadgeIdle.TLabel"
+            text = "Send: idle"
+        self.mediapipe_send_badge.configure(text=text, style=style)
+
+    def update_mediapipe_targets_only(self, endpoints=None):
+        """Refresh targets label without touching send badge."""
+        targets = endpoints if endpoints is not None else []
+        targets_text = ", ".join(targets) if targets else "none"
+        if hasattr(self, "mediapipe_target_label"):
+            self.mediapipe_target_label.configure(text=f"Targets: {targets_text}")

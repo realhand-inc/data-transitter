@@ -108,6 +108,11 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         self.rotation_endpoints = []
         self.rotation_ip_var = tk.StringVar(value="192.168.1.56:5555")
 
+        # ZMQ for MediaPipe hand data broadcasting
+        self.hand_data_sockets = []
+        self.hand_data_endpoints = []
+        self.hand_data_ip_var = tk.StringVar(value="localhost:5556")
+
         # Screenshot viewer state
         self.screenshot_window = None
         self.screenshot_label = None
@@ -460,6 +465,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             self.rotation_sockets.append(sock)
             self.rotation_endpoints.append(endpoint)
             self.render_rotation_endpoints()
+            self.update_mediapipe_targets_only(self.rotation_endpoints)
 
             self.log(f"Connected rotation data endpoint: {endpoint}")
             self.set_status(f"Connected to {endpoint}")
@@ -481,6 +487,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             del self.rotation_sockets[index]
             del self.rotation_endpoints[index]
             self.render_rotation_endpoints()
+            self.update_mediapipe_targets_only(self.rotation_endpoints)
 
             self.log(f"Disconnected rotation data endpoint: {endpoint}")
             self.set_status("Idle")
@@ -493,6 +500,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         """Disconnect all rotation endpoints"""
         for endpoint in list(self.rotation_endpoints):
             self.disconnect_rotation_endpoint(endpoint)
+        self.update_mediapipe_targets_only(self.rotation_endpoints)
 
     def render_rotation_endpoints(self):
         """Render connected rotation endpoints with per-row disconnect buttons"""
@@ -501,6 +509,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
         if not self.rotation_endpoints:
             ttk.Label(self.rotation_endpoints_frame, text="No endpoints connected", style="TLabel").grid(column=0, row=0, padx=6, pady=4, sticky="w")
+            self.update_mediapipe_targets_only(self.rotation_endpoints)
             return
 
         for idx, endpoint in enumerate(self.rotation_endpoints):
@@ -516,6 +525,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, weight=0)
             row.columnconfigure(2, weight=0)
+        self.update_mediapipe_targets_only(self.rotation_endpoints)
 
     def _reconnect_rotation_endpoint(self, endpoint: str):
         """Attempt to reconnect an existing endpoint"""
@@ -523,6 +533,96 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         self.disconnect_rotation_endpoint(endpoint)
         self.rotation_ip_var.set(endpoint)
         self.connect_rotation_endpoint()
+
+    def connect_hand_data_endpoint(self):
+        """Connect to a MediaPipe hand data endpoint (IP:Port)"""
+        endpoint = self.hand_data_ip_var.get().strip()
+        if not endpoint:
+            messagebox.showinfo("Hand Data", "Enter an IP:Port before connecting.")
+            return
+
+        try:
+            # Parse port from endpoint (format: "host:port")
+            if ':' not in endpoint:
+                messagebox.showerror("Hand Data", "Format must be Host:Port (e.g., localhost:5556)")
+                return
+
+            _, port_str = endpoint.split(':', 1)
+            port = int(port_str)
+
+            # Check if already connected
+            if endpoint in self.hand_data_endpoints:
+                messagebox.showinfo("Hand Data", f"Already connected to {endpoint}")
+                return
+
+            # Create and bind ZMQ socket (we are the server, bridge connects to us)
+            sock = self.zmq_context.socket(zmq.PUB)
+            sock.bind(f"tcp://*:{port}")
+
+            self.log(f"Creating ZMQ PUB socket for hand data on tcp://*:{port}")
+
+            # Add to lists
+            self.hand_data_sockets.append(sock)
+            self.hand_data_endpoints.append(endpoint)
+            self.render_hand_data_endpoints()
+
+            self.log(f"Bound hand data endpoint: {endpoint} (Total sockets: {len(self.hand_data_sockets)})")
+            self.set_status(f"Connected to {endpoint}")
+
+        except ValueError:
+            messagebox.showerror("Hand Data", "Port must be a number")
+        except Exception as e:
+            messagebox.showerror("Hand Data", f"Failed to connect: {e}")
+            self.log(f"Failed to connect to {endpoint}: {e}")
+
+    def disconnect_hand_data_endpoint(self, endpoint):
+        """Disconnect from a specific hand data endpoint"""
+        try:
+            idx = self.hand_data_endpoints.index(endpoint)
+
+            # Close socket
+            sock = self.hand_data_sockets[idx]
+            sock.close()
+
+            # Remove from lists
+            del self.hand_data_sockets[idx]
+            del self.hand_data_endpoints[idx]
+
+            self.render_hand_data_endpoints()
+            self.log(f"Disconnected hand data endpoint: {endpoint}")
+            self.set_status(f"Disconnected from {endpoint}")
+
+        except ValueError:
+            pass  # Endpoint not in list
+        except Exception as e:
+            self.log(f"Error disconnecting {endpoint}: {e}")
+
+    def render_hand_data_endpoints(self):
+        """Render the list of connected hand data endpoints"""
+        # Clear existing widgets
+        for widget in self.hand_endpoints_frame.winfo_children():
+            widget.destroy()
+
+        if not self.hand_data_endpoints:
+            ttk.Label(self.hand_endpoints_frame,
+                      text="No endpoints connected",
+                      foreground=self.palette["muted"]).grid(column=0, row=0, sticky="w")
+            return
+
+        ttk.Label(self.hand_endpoints_frame,
+                  text="Connected Endpoints:",
+                  font=("TkDefaultFont", 9, "bold")).grid(column=0, row=0, sticky="w", pady=(0, 4))
+
+        for idx, endpoint in enumerate(self.hand_data_endpoints):
+            row_frame = ttk.Frame(self.hand_endpoints_frame, style="Surface.TFrame")
+            row_frame.grid(column=0, row=idx+1, sticky="ew", pady=2)
+            row_frame.columnconfigure(0, weight=1)
+
+            ttk.Label(row_frame, text=f"• {endpoint}").grid(column=0, row=0, sticky="w")
+
+            disconnect_btn = ttk.Button(row_frame, text="Disconnect", style="Ghost.TButton",
+                                        command=lambda ep=endpoint: self.disconnect_hand_data_endpoint(ep))
+            disconnect_btn.grid(column=1, row=0, padx=(8, 0))
 
     def reboot_device(self, device: str):
         """Restart a single headset"""
@@ -618,6 +718,87 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
         except Exception as e:
             pass  # Silently ignore sending errors to avoid flooding logs
+
+    def _mediapipe_to_landmark_list(self, mediapipe_array):
+        """Convert MediaPipe numpy array to list of {x, y, z} dicts
+
+        Args:
+            mediapipe_array: Numpy array of shape (21, 3) or None
+
+        Returns:
+            List of 21 dicts with x, y, z keys (floats), or empty list if None
+        """
+        if mediapipe_array is None:
+            return []
+        try:
+            return [
+                {"x": float(pos[0]), "y": float(pos[1]), "z": float(pos[2])}
+                for pos in mediapipe_array
+            ]
+        except Exception:
+            return []
+
+    def send_hand_data(self):
+        """Send MediaPipe hand data to all connected ZMQ endpoints
+
+        Sends JSON format:
+        {
+          "left": [{"x": 0.1, "y": 0.2, "z": 0.3}, ...],  // 21 landmarks
+          "right": [{"x": 0.1, "y": 0.2, "z": 0.3}, ...]  // 21 landmarks
+        }
+        """
+        if not self.hand_data_sockets:
+            return
+
+        try:
+            # Get MediaPipe data snapshot (thread-safe copy)
+            with self.data_lock:
+                left_mp = self.mediapipe_points.get("left")
+                right_mp = self.mediapipe_points.get("right")
+                # Make copies if not None
+                left_copy = np.copy(left_mp) if left_mp is not None else None
+                right_copy = np.copy(right_mp) if right_mp is not None else None
+
+            # Convert to landmark list format
+            hand_message = {
+                "left": self._mediapipe_to_landmark_list(left_copy),
+                "right": self._mediapipe_to_landmark_list(right_copy)
+            }
+
+            # Serialize to JSON
+            json_data = json.dumps(hand_message)
+
+            # Debug: Log data status
+            if not hasattr(self, '_hand_data_send_count'):
+                self._hand_data_send_count = 0
+
+            self._hand_data_send_count += 1
+
+            # Log every 100 sends or if first send
+            if self._hand_data_send_count == 1 or self._hand_data_send_count % 100 == 0:
+                left_count = len(hand_message['left'])
+                right_count = len(hand_message['right'])
+                self.log(f"Hand data send #{self._hand_data_send_count}: Left={left_count} landmarks, Right={right_count} landmarks")
+
+                # Log raw data state
+                if left_copy is None and right_copy is None:
+                    self.log(f"  WARNING: Both hands are None in mediapipe_points")
+                elif left_copy is None:
+                    self.log(f"  Left hand is None, Right shape: {right_copy.shape if right_copy is not None else 'None'}")
+                elif right_copy is None:
+                    self.log(f"  Left shape: {left_copy.shape if left_copy is not None else 'None'}, Right hand is None")
+
+            # Send to all connected endpoints
+            for sock in self.hand_data_sockets:
+                try:
+                    sock.send_string(json_data, zmq.NOBLOCK)
+                except zmq.Again:
+                    pass  # Socket buffer full, skip this send
+                except Exception as e:
+                    self.log(f"Error sending hand data: {e}")
+
+        except Exception as e:
+            self.log(f"Error in send_hand_data: {e}")
 
     def collect_full_xr_data(self) -> dict:
         """Collect all available XR data into a dictionary structure."""
@@ -789,6 +970,18 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                 full_data = self.collect_full_xr_data()
                 left_mp = self.mediapipe_from_raw(full_data.get("leftHand", {}).get("joints_raw"))
                 right_mp = self.mediapipe_from_raw(full_data.get("rightHand", {}).get("joints_raw"))
+
+                # Debug: Log hand data collection (first time only)
+                if not hasattr(self, '_hand_collection_logged'):
+                    self._hand_collection_logged = True
+                    left_has_data = "leftHand" in full_data and full_data["leftHand"].get("joints_raw") is not None
+                    right_has_data = "rightHand" in full_data and full_data["rightHand"].get("joints_raw") is not None
+                    self.log(f"Hand data collection: Left={left_has_data}, Right={right_has_data}")
+                    if left_mp is not None:
+                        self.log(f"  Left MediaPipe shape: {left_mp.shape}")
+                    if right_mp is not None:
+                        self.log(f"  Right MediaPipe shape: {right_mp.shape}")
+
                 with self.data_lock:
                     self.raw_data_snapshot = full_data
                     if self.data_status == 'OK' and full_data:
@@ -799,6 +992,9 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                         self.last_good_mediapipe_points["left"] = left_mp
                     if right_mp is not None:
                         self.last_good_mediapipe_points["right"] = right_mp
+
+                # Broadcast MediaPipe hand data via ZMQ
+                self.send_hand_data()
 
                 # Sleep to maintain ~10Hz update rate
                 time.sleep(0.1)
@@ -906,6 +1102,8 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                 stale = self.last_data_ts and (now - self.last_data_ts > 1.0)
                 mp_left_disp = mp_left if (mp_left is not None and not stale and status == 'OK') else (mp_left_last if mp_left_last is not None else mp_left)
                 mp_right_disp = mp_right if (mp_right is not None and not stale and status == 'OK') else (mp_right_last if mp_right_last is not None else mp_right)
+                endpoints = list(self.rotation_endpoints)
+                self.update_mediapipe_send_badge(active=not stale and status == 'OK', stale=stale, endpoints=endpoints)
                 self.update_mediapipe_table("left", mp_left_disp)
                 self.update_mediapipe_table("right", mp_right_disp)
 
@@ -991,6 +1189,13 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
         # Close all ZMQ sockets
         for sock in self.rotation_sockets:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+        # Close all hand data ZMQ sockets
+        for sock in self.hand_data_sockets:
             try:
                 sock.close()
             except Exception:
