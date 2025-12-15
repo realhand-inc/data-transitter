@@ -189,23 +189,20 @@ class AdbControlApp:
         connect_btn = ttk.Button(frame, text="Connect over IP", style="Ghost.TButton", command=self.connect_ip)
         connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
 
-        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", style="Ghost.TButton", command=self.auto_connect_wifi)
-        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 4), sticky="ew")
-
         screenshot_btn = ttk.Button(frame, text="Screenshot", style="Ghost.TButton", command=self.capture_screenshot)
-        screenshot_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
+        screenshot_btn.grid(column=1, row=4, padx=4, pady=(0, 8), sticky="ew")
 
         self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground=self.palette["accent"])
-        self.status_label.grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+        self.status_label.grid(column=0, row=5, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=7, columnspan=2, padx=8, pady=8, sticky="ew")
+        ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
         rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
-        rotation_entry_row.grid(column=0, row=9, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        rotation_entry_row.grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
         rotation_entry_row.columnconfigure(0, weight=1)
         rotation_entry_row.columnconfigure(1, weight=0)
         rotation_entry_row.columnconfigure(2, weight=0)
@@ -436,19 +433,25 @@ class AdbControlApp:
             power_btn = ttk.Button(row, text="Power Off", command=lambda d=device: self.power_off_device(d))
             power_btn.grid(column=2, row=0, padx=4, sticky="ew")
 
+            # Column 3: WiFi button if USB (no colon in name)
+            if ":" not in device:
+                wifi_btn = ttk.Button(row, text="Enable WiFi", command=lambda d=device: self.start_wifi_for_device(d))
+                wifi_btn.grid(column=3, row=0, padx=4, sticky="ew")
+
             screenshot_btn = ttk.Button(row, text="Screenshot", command=lambda d=device: self.capture_screenshot_device(d))
-            screenshot_btn.grid(column=3, row=0, padx=4, sticky="ew")
+            screenshot_btn.grid(column=4, row=0, padx=4, sticky="ew")
 
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, weight=0)
             row.columnconfigure(2, weight=0)
             row.columnconfigure(3, weight=0)
+            row.columnconfigure(4, weight=0)
 
     def selected_devices(self):
         selected = [dev for dev, var in self.device_vars.items() if var.get() == 1]
         if selected:
             return selected
-        return self.devices[:1]  # Default to first device if none selected
+        return self.devices  # Return all found devices if none are selected
 
     def connect_ip(self):
         ip = self.ip_var.get().strip()
@@ -482,23 +485,13 @@ class AdbControlApp:
                 return match.group(1)
         return None
 
-    def auto_connect_wifi(self):
-        """Switch selected USB device to TCPIP:5555 and connect over Wi-Fi."""
+    def start_wifi_for_device(self, device: str):
+        """Switch specific USB device to TCPIP:5555 and connect over Wi-Fi."""
         port = "5555"
 
         def _run():
-            self.set_status("Preparing ADB over Wi-Fi...")
-            # Prefer explicitly selected USB device; fall back to first detected USB device.
-            usb_candidates = [d for d in self.selected_devices() if ":" not in d]
-            if not usb_candidates:
-                usb_candidates = [d for d in get_connected_adb_devices() if ":" not in d]
-
-            if not usb_candidates:
-                self.log("Wi-Fi connect: no USB-connected devices detected")
-                self.set_status("No USB device found")
-                return
-
-            device = usb_candidates[0]
+            self.set_status(f"Enabling WiFi for {device}...")
+            
             ip_found = self._get_device_ip(device)
             if not ip_found:
                 ip_fallback = self.ip_var.get().strip()
