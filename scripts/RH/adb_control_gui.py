@@ -199,7 +199,7 @@ class AdbControlApp:
         ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Camera Rotation Data Sending", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
         rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
         rotation_entry_row.grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
@@ -699,6 +699,11 @@ class AdbControlApp:
 
     def restart_app(self):
         self.run_for_devices("restart app", self._restart_app_on_device)
+
+        # Auto-connect rotation endpoint if set and not connected
+        endpoint = self.rotation_ip_var.get().strip()
+        if endpoint and endpoint not in self.rotation_endpoints:
+            self.connect_rotation_endpoint()
 
     def run_for_devices(self, label: str, action):
         devices = self.selected_devices()
