@@ -36,23 +36,20 @@ class DashboardTabMixin:
         connect_btn = ttk.Button(frame, text="Connect over IP", style="Ghost.TButton", command=self.connect_ip)
         connect_btn.grid(column=1, row=3, padx=4, pady=(2, 8), sticky="ew")
 
-        wifi_btn = ttk.Button(frame, text="USB→WiFi (tcpip+connect)", style="Ghost.TButton", command=self.auto_connect_wifi)
-        wifi_btn.grid(column=1, row=4, padx=4, pady=(0, 4), sticky="ew")
-
         screenshot_btn = ttk.Button(frame, text="Screenshot", style="Ghost.TButton", command=self.capture_screenshot)
-        screenshot_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
+        screenshot_btn.grid(column=1, row=4, padx=4, pady=(0, 8), sticky="ew")
 
         self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground=self.palette["accent"])
-        self.status_label.grid(column=0, row=6, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+        self.status_label.grid(column=0, row=5, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=7, columnspan=2, padx=8, pady=8, sticky="ew")
+        ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Rotation Data Endpoint", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
         rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
-        rotation_entry_row.grid(column=0, row=9, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        rotation_entry_row.grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
         rotation_entry_row.columnconfigure(0, weight=1)
         rotation_entry_row.columnconfigure(1, weight=0)
         rotation_entry_row.columnconfigure(2, weight=0)
@@ -68,15 +65,15 @@ class DashboardTabMixin:
 
         # List of connected rotation endpoints
         self.rotation_endpoints_frame = ttk.Frame(frame, style="Surface.TFrame")
-        self.rotation_endpoints_frame.grid(column=0, row=11, columnspan=2, padx=8, pady=2, sticky="nsew")
+        self.rotation_endpoints_frame.grid(column=0, row=10, columnspan=2, padx=8, pady=2, sticky="nsew")
 
         self.render_rotation_endpoints()
 
         # MediaPipe Hand Data Broadcasting section
-        ttk.Label(frame, text="MediaPipe Hand Data Broadcasting", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=12, columnspan=2, padx=8, pady=(12, 4), sticky="w")
+        ttk.Label(frame, text="MediaPipe Hand Data Broadcasting", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=11, columnspan=2, padx=8, pady=(12, 4), sticky="w")
 
         hand_entry_row = ttk.Frame(frame, style="Surface.TFrame")
-        hand_entry_row.grid(column=0, row=13, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        hand_entry_row.grid(column=0, row=12, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
         hand_entry_row.columnconfigure(0, weight=1)
         hand_entry_row.columnconfigure(1, weight=0)
 

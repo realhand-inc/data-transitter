@@ -281,19 +281,25 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             power_btn = ttk.Button(row, text="Power Off", command=lambda d=device: self.power_off_device(d))
             power_btn.grid(column=2, row=0, padx=4, sticky="ew")
 
+            # Column 3: WiFi button if USB (no colon in name)
+            if ":" not in device:
+                wifi_btn = ttk.Button(row, text="Enable WiFi", command=lambda d=device: self.start_wifi_for_device(d))
+                wifi_btn.grid(column=3, row=0, padx=4, sticky="ew")
+
             screenshot_btn = ttk.Button(row, text="Screenshot", command=lambda d=device: self.capture_screenshot_device(d))
-            screenshot_btn.grid(column=3, row=0, padx=4, sticky="ew")
+            screenshot_btn.grid(column=4, row=0, padx=4, sticky="ew")
 
             row.columnconfigure(0, weight=1)
             row.columnconfigure(1, weight=0)
             row.columnconfigure(2, weight=0)
             row.columnconfigure(3, weight=0)
+            row.columnconfigure(4, weight=0)
 
     def selected_devices(self):
         selected = [dev for dev, var in self.device_vars.items() if var.get() == 1]
         if selected:
             return selected
-        return self.devices[:1]  # Default to first device if none selected
+        return self.devices  # Return all found devices if none are selected
 
     def connect_ip(self):
         ip = self.ip_var.get().strip()
@@ -327,23 +333,13 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                 return match.group(1)
         return None
 
-    def auto_connect_wifi(self):
-        """Switch selected USB device to TCPIP:5555 and connect over Wi-Fi."""
+    def start_wifi_for_device(self, device: str):
+        """Switch specific USB device to TCPIP:5555 and connect over Wi-Fi."""
         port = "5555"
 
         def _run():
-            self.set_status("Preparing ADB over Wi-Fi...")
-            # Prefer explicitly selected USB device; fall back to first detected USB device.
-            usb_candidates = [d for d in self.selected_devices() if ":" not in d]
-            if not usb_candidates:
-                usb_candidates = [d for d in get_connected_adb_devices() if ":" not in d]
-
-            if not usb_candidates:
-                self.log("Wi-Fi connect: no USB-connected devices detected")
-                self.set_status("No USB device found")
-                return
-
-            device = usb_candidates[0]
+            self.set_status(f"Enabling WiFi for {device}...")
+            
             ip_found = self._get_device_ip(device)
             if not ip_found:
                 ip_fallback = self.ip_var.get().strip()
@@ -646,6 +642,11 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
     def restart_app(self):
         self.run_for_devices("restart app", self._restart_app_on_device)
+
+        # Auto-connect rotation endpoint if set and not connected
+        endpoint = self.rotation_ip_var.get().strip()
+        if endpoint and endpoint not in self.rotation_endpoints:
+            self.connect_rotation_endpoint()
 
     def open_app(self):
         self.run_for_devices("open app", self._open_app_on_device)
