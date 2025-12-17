@@ -103,6 +103,11 @@ class AdbControlApp:
         self.screenshot_label = None
         self.screenshot_image = None  # keep reference to avoid GC
 
+        # Diagnostic state
+        self.diagnostic_running = False
+        self.diagnostic_results = None
+        self.autofix_button = None
+
         self.configure_styles()
 
         main = ttk.Frame(root, padding=12, style="App.TFrame")
@@ -192,17 +197,22 @@ class AdbControlApp:
         screenshot_btn = ttk.Button(frame, text="Screenshot", style="Ghost.TButton", command=self.capture_screenshot)
         screenshot_btn.grid(column=1, row=4, padx=4, pady=(0, 8), sticky="ew")
 
+        # Add diagnostic button (Linux only)
+        if sys.platform.startswith('linux'):
+            diagnose_btn = ttk.Button(frame, text="Diagnose Connection", style="Ghost.TButton", command=self.run_connection_diagnosis)
+            diagnose_btn.grid(column=1, row=5, padx=4, pady=(0, 8), sticky="ew")
+
         self.status_label = ttk.Label(frame, textvariable=self.status_var, foreground=self.palette["accent"])
-        self.status_label.grid(column=0, row=5, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+        self.status_label.grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 8), sticky="w")
 
         # Separator
-        ttk.Separator(frame, orient='horizontal').grid(column=0, row=6, columnspan=2, padx=8, pady=8, sticky="ew")
+        ttk.Separator(frame, orient='horizontal').grid(column=0, row=8, columnspan=2, padx=8, pady=8, sticky="ew")
 
         # Rotation data endpoint section
-        ttk.Label(frame, text="Camera Rotation Data Sending", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=7, columnspan=2, padx=8, pady=(0, 4), sticky="w")
+        ttk.Label(frame, text="Camera Rotation Data Sending", font=("TkDefaultFont", 9, "bold")).grid(column=0, row=9, columnspan=2, padx=8, pady=(0, 4), sticky="w")
 
         rotation_entry_row = ttk.Frame(frame, style="Surface.TFrame")
-        rotation_entry_row.grid(column=0, row=8, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
+        rotation_entry_row.grid(column=0, row=10, columnspan=2, padx=8, pady=(0, 4), sticky="ew")
         rotation_entry_row.columnconfigure(0, weight=1)
         rotation_entry_row.columnconfigure(1, weight=0)
         rotation_entry_row.columnconfigure(2, weight=0)
@@ -217,10 +227,10 @@ class AdbControlApp:
         rotation_disconnect_btn.grid(column=2, row=0, padx=4, pady=2, sticky="ew")
 
         # List of connected rotation endpoints
-        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=10, padx=8, pady=(0, 2), sticky="w")
+        ttk.Label(frame, text="Connected Endpoints:", font=("TkDefaultFont", 8)).grid(column=0, row=12, padx=8, pady=(0, 2), sticky="w")
         self.rotation_endpoints_frame = ttk.Frame(frame, style="Surface.TFrame")
-        self.rotation_endpoints_frame.grid(column=0, row=11, columnspan=2, padx=8, pady=2, sticky="nsew")
-        frame.rowconfigure(11, weight=1)
+        self.rotation_endpoints_frame.grid(column=0, row=13, columnspan=2, padx=8, pady=2, sticky="nsew")
+        frame.rowconfigure(13, weight=1)
         self.render_rotation_endpoints()
 
     def build_data_frame(self, parent: ttk.Frame):
@@ -906,6 +916,165 @@ class AdbControlApp:
             self.send_status_badge.config(text=f"Send: {len(self.rotation_sockets)} target(s)", style="BadgeWarn.TLabel")
         else:
             self.send_status_badge.config(text="Send: none", style="BadgeIdle.TLabel")
+
+    def run_connection_diagnosis(self):
+        """Run connection diagnostic in background thread."""
+        if self.diagnostic_running:
+            self.log("Diagnostic already running...")
+            return
+
+        self.diagnostic_running = True
+        self.set_status("Running diagnostic...")
+        self.log("=== Connection Diagnostic Started ===")
+
+        def _diagnose():
+            try:
+                from test_adb_simple import diagnose_adb_udev_issue
+                results = diagnose_adb_udev_issue()
+
+                # Update UI from main thread
+                self.root.after(0, lambda: self._display_diagnostic_results(results))
+            except Exception as e:
+                self.root.after(0, lambda: self.log(f"Diagnostic error: {e}"))
+                self.root.after(0, lambda: self.set_status("Diagnostic failed"))
+            finally:
+                self.diagnostic_running = False
+
+        threading.Thread(target=_diagnose, daemon=True).start()
+
+    def _display_diagnostic_results(self, results):
+        """Display diagnostic results in log and create auto-fix button if needed."""
+        self.diagnostic_results = results
+
+        # Log platform info
+        self.log(f"Platform: {results['platform']}")
+
+        # Log USB devices
+        pico_devices = results['pico_usb_devices']
+        if pico_devices:
+            self.log(f"Pico USB Devices Found: {len(pico_devices)}")
+            for dev in pico_devices:
+                self.log(f"  - Bus {dev['bus']} Device {dev['device']}: {dev['description']}")
+        else:
+            self.log("No Pico USB devices detected")
+
+        # Log ADB devices
+        adb_devices = results['adb_devices']
+        if adb_devices:
+            self.log(f"ADB Devices Found: {len(adb_devices)}")
+            for dev in adb_devices:
+                self.log(f"  - {dev}")
+        else:
+            self.log("No ADB devices found")
+
+        # Check for issue
+        if results['issue_detected']:
+            self.log("WARNING: ISSUE DETECTED: Pico device connected via USB but not accessible via ADB")
+            self.log("")
+            self.log("Likely cause: Missing Linux udev rules for vendor ID 2d40")
+            self.log("")
+            self.log("=== Manual Fix Instructions ===")
+            self.log(results['recommended_fix'])
+            self.log("")
+            self.log("Or click the Auto-Fix button below to apply these changes automatically.")
+
+            # Show auto-fix button
+            self._show_autofix_button()
+        else:
+            self.log("CHECKMARK: No udev issues detected")
+            self._hide_autofix_button()
+
+        self.log("=== Diagnostic Complete ===")
+        self.set_status("Diagnostic complete")
+
+    def _show_autofix_button(self):
+        """Show the auto-fix button in the devices frame."""
+        if self.autofix_button is not None:
+            return  # Already showing
+
+        # Get the parent frame from the diagnostic button's parent
+        # We need to access the devices frame
+        devices_frame = self.devices_container.master
+
+        # Create auto-fix button in a highlighted style
+        self.autofix_button = ttk.Button(
+            devices_frame,
+            text="Auto-Fix udev Rules (requires sudo)",
+            style="Accent.TButton",
+            command=self.run_autofix
+        )
+        # Place it after the diagnose button at row 6
+        self.autofix_button.grid(column=1, row=6, padx=4, pady=(0, 8), sticky="ew")
+
+    def _hide_autofix_button(self):
+        """Hide/remove the auto-fix button."""
+        if self.autofix_button is not None:
+            self.autofix_button.destroy()
+            self.autofix_button = None
+
+    def run_autofix(self):
+        """Execute the automated fix for udev rules."""
+        if not self.diagnostic_results or not self.diagnostic_results['issue_detected']:
+            messagebox.showinfo("Auto-Fix", "No issue detected. Run diagnostic first.")
+            return
+
+        # Confirm with user
+        response = messagebox.askyesno(
+            "Auto-Fix udev Rules",
+            "This will:\n"
+            "1. Create/update /etc/udev/rules.d/51-android.rules\n"
+            "2. Reload udev rules\n"
+            "3. Require sudo password\n\n"
+            "After the fix, you may need to:\n"
+            "- Unplug and replug the USB device\n"
+            "- Restart ADB server (adb kill-server && adb start-server)\n\n"
+            "Continue?"
+        )
+
+        if not response:
+            self.log("Auto-fix cancelled by user")
+            return
+
+        self.set_status("Applying udev fix...")
+        self.log("Starting auto-fix...")
+
+        def _fix():
+            try:
+                from test_adb_simple import execute_udev_fix_with_sudo
+                success, message = execute_udev_fix_with_sudo()
+
+                # Update UI from main thread
+                self.root.after(0, lambda: self._handle_autofix_result(success, message))
+            except Exception as e:
+                self.root.after(0, lambda: self._handle_autofix_result(False, str(e)))
+
+        threading.Thread(target=_fix, daemon=True).start()
+
+    def _handle_autofix_result(self, success, message):
+        """Handle the result of auto-fix operation."""
+        if success:
+            self.log("CHECKMARK: Auto-fix completed successfully!")
+            self.log(message)
+            self.log("")
+            self.log("Next steps:")
+            self.log("1. Unplug and replug your Pico device")
+            self.log("2. Click 'Refresh' to check if device appears")
+            self.log("3. If still not visible, restart ADB: adb kill-server && adb start-server")
+
+            messagebox.showinfo(
+                "Auto-Fix Complete",
+                "udev rules updated successfully!\n\n"
+                "Please unplug and replug your device,\n"
+                "then click Refresh."
+            )
+
+            # Hide auto-fix button
+            self._hide_autofix_button()
+            self.set_status("Auto-fix complete")
+        else:
+            self.log(f"X: Auto-fix failed: {message}")
+            messagebox.showerror("Auto-Fix Failed", f"Failed to apply fix:\n{message}")
+            self.set_status("Auto-fix failed")
 
     def cleanup(self):
         """Cleanup resources before closing"""
