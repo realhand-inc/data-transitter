@@ -29,6 +29,9 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.q_actual = None  # From hardware feedback
         self.q_command = None  # Final command to send
         self.q_command_prev = None  # Previous command for velocity limiting
+        self.q_simulated = None  # Joint positions from MuJoCo after physics step
+        self.q_simulated_prev = None  # For secondary velocity limiting
+        self.send_to_hardware = False  # Control whether to send commands to hardware
         self.is_connected = False
 
         # Speed limiting
@@ -51,9 +54,10 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             },
             'control': {
                 'mode': 'stopped',
-                'q_command': None,
-                'q_actual': None,
-                'error': None,
+                'q_command': None,     # IK output (velocity limited)
+                'q_simulated': None,   # MuJoCo output (after physics)
+                'q_actual': None,      # Hardware feedback
+                'error': None,         # q_simulated - q_actual
             }
         }
 
@@ -77,7 +81,30 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         
         self.stop_btn = tk.Button(self.gui_root, text="EMERGENCY STOP", command=self.emergency_stop, bg="red", fg="white", font=("Arial", 12, "bold"), state="disabled")
         self.stop_btn.pack(pady=5, fill="x", padx=20)
-        
+
+        # Send to Hardware toggle
+        self.send_hardware_var = tk.BooleanVar(value=False)  # Default: OFF (viz-only mode)
+        self.send_hardware_checkbox = tk.Checkbutton(
+            self.gui_root,
+            text="Send to Hardware",
+            variable=self.send_hardware_var,
+            command=self._toggle_hardware_send,
+            font=("Arial", 11),
+            bg="#FFD700",  # Gold background for visibility
+            activebackground="#FFA500"
+        )
+        self.send_hardware_checkbox.pack(pady=5, padx=20, fill="x")
+
+        # Add warning label
+        self.hardware_warning_label = tk.Label(
+            self.gui_root,
+            text="⚠️  CAUTION: Enables physical robot control",
+            font=("Arial", 9),
+            fg="red",
+            bg="white"
+        )
+        self.hardware_warning_label.pack(pady=2)
+
         self.status_label = tk.Label(self.gui_root, text="Status: Disconnected", fg="red", font=("Arial", 10, "bold"))
         self.status_label.pack(pady=5)
 
@@ -222,6 +249,15 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             except Exception as e:
                 print(f"Error stopping hardware: {e}")
 
+    def _toggle_hardware_send(self):
+        """Toggle hardware sending on/off."""
+        self.send_to_hardware = self.send_hardware_var.get()
+        if self.send_to_hardware:
+            print("[HARDWARE] Sending to hardware ENABLED")
+            self.hardware_warning_label.config(text="⚠️  Hardware control ACTIVE", fg="red")
+        else:
+            print("[HARDWARE] Sending to hardware DISABLED (visualization only)")
+            self.hardware_warning_label.config(text="✓  Visualization-only mode (safe)", fg="green")
 
     def _placo_setup(self):
         super()._placo_setup()
@@ -374,6 +410,101 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         # Update MuJoCo simulation
         super()._send_command()
 
+    def _read_from_mujoco(self) -> np.ndarray:
+        """
+        Read simulated joint positions from MuJoCo after physics step.
+
+        Returns:
+            q_simulated: Simulated joint positions [6x1] for the arm
+        """
+        from xrobotoolkit_teleop.utils.mujoco_utils import calc_placo_q_from_mujoco_qpos
+
+        # Read full MuJoCo state after physics step
+        mj_qpos = self.mj_data.qpos.copy()
+
+        # Convert to Placo format
+        placo_q_full = calc_placo_q_from_mujoco_qpos(
+            self.mj_model,
+            self.placo_robot,
+            mj_qpos,
+            floating_base=False  # Dual UR5e has fixed base
+        )
+
+        # Extract arm joints only (6-DOF)
+        if self.arm_joint_indices and len(self.arm_joint_indices) == 6:
+            q_simulated = np.array([placo_q_full[i] for i in self.arm_joint_indices])
+
+            # Sanity check for NaN/Inf (simulation instability detection)
+            if np.any(np.isnan(q_simulated)) or np.any(np.isinf(q_simulated)):
+                print("ERROR: Simulation unstable (NaN/Inf detected)")
+                self.emergency_stop()
+                return self.q_actual.copy() if self.q_actual is not None else None
+
+            return q_simulated
+        else:
+            print("ERROR: arm_joint_indices not properly configured")
+            return None
+
+    def _send_simulated_to_hardware(self, q_simulated: np.ndarray):
+        """
+        Send simulated joint positions to physical robot hardware.
+
+        Args:
+            q_simulated: Simulated joint positions from MuJoCo [6x1]
+        """
+        # Check if hardware sending is enabled (safety feature for testing)
+        if not self.send_to_hardware:
+            # Visualization-only mode: skip hardware command
+            return
+
+        if not self.is_connected or q_simulated is None:
+            return
+
+        # Apply secondary velocity limiting for safety
+        if self.q_simulated_prev is not None:
+            q_limited, was_limited = self._apply_velocity_limit(
+                q_simulated,
+                self.q_simulated_prev
+            )
+            if was_limited:
+                print("[SAFETY] Simulated state velocity limited before hardware")
+        else:
+            q_limited = q_simulated
+
+        # Store for next cycle
+        self.q_simulated_prev = q_limited.copy()
+
+        # Hardware servo constants
+        SERVO_TIME = 0.008
+        LOOKAHEAD_TIME = 0.2
+        SERVO_GAIN = 100.0
+
+        try:
+            if self.control_mode in ["hand_tracking", "manual"]:
+                t_start = self.rtde_c.initPeriod()
+                self.rtde_c.servoJ(
+                    q_limited.tolist(),
+                    0.0,  # velocity (let servoJ calculate)
+                    0.0,  # acceleration
+                    SERVO_TIME,
+                    LOOKAHEAD_TIME,
+                    SERVO_GAIN
+                )
+                self.rtde_c.waitPeriod(t_start)
+        except Exception as e:
+            print(f"Hardware command error: {e}")
+
+    def _update_logging_data(self):
+        """Update logging data structure with current state."""
+        self.log_data['control']['mode'] = self.control_mode
+        self.log_data['control']['q_command'] = self.q_command.copy() if self.q_command is not None else None
+        self.log_data['control']['q_simulated'] = self.q_simulated.copy() if self.q_simulated is not None else None
+        self.log_data['control']['q_actual'] = self.q_actual.copy() if self.q_actual is not None else None
+
+        # Calculate error: simulated vs actual (digital twin tracking error)
+        if self.q_simulated is not None and self.q_actual is not None:
+            self.log_data['control']['error'] = self.q_simulated - self.q_actual
+
     def _send_command_to_hardware(self):
         """Send q_command to physical robot hardware."""
         if not self.is_connected or self.q_command is None:
@@ -406,22 +537,13 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             return
 
         for i in range(6):
-            # Display target angle from IK (always show if available, even without robot)
-            if self.q_target is not None and i < len(self.q_target):
-                target_deg = math.degrees(self.q_target[i])
-                # Add indicator if velocity limited
-                if self.log_data['ik_result']['velocity_limited']:
-                    self.joint_display_labels[i]['target'].config(
-                        text=f"{target_deg:>7.2f}° ⚡", fg="orange"
-                    )
-                else:
-                    self.joint_display_labels[i]['target'].config(
-                        text=f"{target_deg:>7.2f}°", fg="black"
-                    )
-            elif self.q_command is not None and i < len(self.q_command):
-                # Fallback to command if target not available (manual mode)
-                target_deg = math.degrees(self.q_command[i])
-                self.joint_display_labels[i]['target'].config(text=f"{target_deg:>7.2f}°", fg="black")
+            # Display SIMULATED angle (from MuJoCo physics)
+            if self.q_simulated is not None and i < len(self.q_simulated):
+                simulated_deg = math.degrees(self.q_simulated[i])
+                self.joint_display_labels[i]['target'].config(
+                    text=f"{simulated_deg:>7.2f}°",
+                    fg="blue"  # Blue to indicate "simulated" not "target"
+                )
             else:
                 self.joint_display_labels[i]['target'].config(text="---")
 
@@ -432,9 +554,9 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             else:
                 self.joint_display_labels[i]['actual'].config(text="---")
 
-            # Display error (only if both target and actual available)
-            if self.q_target is not None and self.q_actual is not None:
-                error_deg = math.degrees(self.q_target[i] - self.q_actual[i])
+            # Display error (simulated - actual)
+            if self.q_simulated is not None and self.q_actual is not None:
+                error_deg = math.degrees(self.q_simulated[i] - self.q_actual[i])
                 # Color code errors (red if > 5 degrees)
                 if abs(error_deg) > 5.0:
                     self.joint_display_labels[i]['error'].config(
@@ -493,6 +615,21 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                     if len(delta) > 3:
                         log_output.append(f"    Delta Rot:     [{delta[3]:>7.4f}, {delta[4]:>7.4f}, {delta[5]:>7.4f}]")
 
+        # MuJoCo Simulation Output
+        log_output.append("\n[MUJOCO SIMULATION OUTPUT]")
+        if self.log_data['control']['q_simulated'] is not None:
+            q_sim = self.log_data['control']['q_simulated']
+            log_output.append(f"  Simulated Joints (rad): [{', '.join([f'{x:>7.4f}' for x in q_sim])}]")
+            log_output.append(f"  Simulated Joints (deg): [{', '.join([f'{math.degrees(x):>7.2f}' for x in q_sim])}]")
+
+            # Show difference between command and simulated (physics effect)
+            if self.log_data['control']['q_command'] is not None:
+                q_cmd = self.log_data['control']['q_command']
+                physics_delta = q_sim - q_cmd
+                log_output.append(f"  Physics Delta (deg):    [{', '.join([f'{math.degrees(x):>+7.2f}' for x in physics_delta])}]")
+                max_delta = np.max(np.abs(physics_delta))
+                log_output.append(f"  Max Physics Effect:     {math.degrees(max_delta):.2f}°")
+
         # Control Output
         log_output.append("\n[CONTROL OUTPUT]")
         if self.log_data['control']['q_command'] is not None:
@@ -546,15 +683,16 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                 if was_limited:
                     print(f"[VELOCITY LIMIT] Max velocity exceeded in {self.control_mode} mode")
 
-        # Log control data
-        self.log_data['control']['mode'] = self.control_mode
-        self.log_data['control']['q_command'] = self.q_command.copy() if self.q_command is not None else None
-        self.log_data['control']['q_actual'] = self.q_actual.copy() if self.q_actual is not None else None
-        if self.q_command is not None and self.q_actual is not None:
-            self.log_data['control']['error'] = self.q_command - self.q_actual
-
     def run(self):
-        """LINEAR PIPELINE: Main control loop."""
+        """
+        LINEAR PIPELINE: Main control loop.
+
+        DIGITAL TWIN ARCHITECTURE:
+        - Commands sent to MuJoCo first
+        - Physics simulation computes physically-valid state
+        - Hardware follows simulated state (digital twin synchronization)
+        - Result: Hardware experiences gravity, inertia, collision effects
+        """
         with mj_viewer.launch_passive(self.mj_model, self.mj_data) as viewer:
             # Set up viewer camera
             viewer.cam.azimuth = 0
@@ -587,20 +725,29 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                     self._extract_q_target_from_ik()
 
                     # STEP 5: SELECT q_command based on control mode
-                    #         This is the decision point!
                     self._select_command_based_on_mode()
 
-                    # STEP 6: Send q_command to BOTH outputs
-                    self._send_command_to_hardware()  # → Physical robot
-                    self._send_command_to_mujoco()    # → Visualization
+                    # STEP 6: Send q_command to MuJoCo FIRST
+                    self._send_command_to_mujoco()
 
-                    # STEP 7: Update GUI displays
-                    self._update_gui_display()       # Joint angle table
-                    self._update_log_display()       # Logging panel
+                    # STEP 7: Physics step (with gravity, dynamics, collisions)
+                    mujoco.mj_step(self.mj_model, self.mj_data)
+
+                    # STEP 8: Read simulated joint state from MuJoCo
+                    self.q_simulated = self._read_from_mujoco()
+
+                    # STEP 9: Send simulated state to hardware
+                    self._send_simulated_to_hardware(self.q_simulated)
+
+                    # STEP 10: Update logging data
+                    self._update_logging_data()
+
+                    # STEP 11: Update GUI displays
+                    self._update_gui_display()
+                    self._update_log_display()
                     self.gui_root.update()
 
-                    # STEP 8: Step simulation and render
-                    mujoco.mj_step(self.mj_model, self.mj_data)
+                    # STEP 12: Render viewer
                     viewer.sync()
 
                 except KeyboardInterrupt:

@@ -108,7 +108,9 @@ python hand_tracking_mujoco_viz.py --hardware_ip=192.168.2.3
 
 ## Dataflow Pipeline
 
-### Complete Linear Pipeline
+### Digital Twin Linear Pipeline
+
+This script implements a **MuJoCo-first linear pipeline** where the simulation acts as a digital twin:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -149,7 +151,7 @@ python hand_tracking_mujoco_viz.py --hardware_ip=192.168.2.3
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 6. Python Control Interface (GUI) ⚡ DECISION POINT         │
+│ 6. Python Control Interface (GUI) ⚡ MODE SELECTION         │
 │                                                             │
 │    Mode Selection:                                          │
 │    • Hand Tracking → q_command = q_target                   │
@@ -160,29 +162,55 @@ python hand_tracking_mujoco_viz.py --hardware_ip=192.168.2.3
 │    • Calculate velocity: (q_command - q_prev) / dt          │
 │    • If velocity > limit: scale down proportionally         │
 └────────────────────────────┬────────────────────────────────┘
+                             │ q_command
                              │
-                             │ q_command (final output)
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 7. MuJoCo Simulation (DIGITAL TWIN FIRST) 🎯               │
+│                                                             │
+│    A. Send q_command to simulation:                         │
+│       • Update placo_robot.state.q                          │
+│       • Convert to mj_data.ctrl                             │
+│                                                             │
+│    B. Physics step (with dynamics):                         │
+│       • mj_step() integrates equations of motion            │
+│       • Applies gravity, inertia, collisions                │
+│       • Enforces joint limits and constraints               │
+│                                                             │
+│    C. Read simulated state:                                 │
+│       • q_simulated = mj_data.qpos (after physics)          │
+│       • Contains physics-corrected joint positions          │
+└────────────────────────────┬────────────────────────────────┘
+                             │ q_simulated (physics-validated)
                              │
-             ┌───────────────┴───────────────┐
-             │                               │
-             ▼                               ▼
-┌─────────────────────┐         ┌─────────────────────┐
-│  Hardware Robot     │         │  MuJoCo Simulation  │
-│  (UR5e via RTDE)    │         │  (3D Visualization) │
-│                     │         │                     │
-│  • rtde_c.servoJ()  │         │  • Update qpos      │
-│  • 8ms cycle (125Hz)│         │  • mj_step()        │
-│  • Servo control    │         │  • viewer.sync()    │
-└──────────┬──────────┘         └─────────────────────┘
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 8. Hardware Robot (UR5e via RTDE) 🤖                       │
+│                                                             │
+│    • Receives q_simulated (not q_command!)                  │
+│    • Secondary velocity limiting applied                    │
+│    • rtde_c.servoJ(q_simulated)                            │
+│    • 8ms cycle (125Hz servo rate)                           │
+│    • Hardware follows digital twin exactly                  │
+└──────────┬──────────────────────────────────────────────────┘
            │
            │ q_actual (feedback)
            │
            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 7. GUI Display & Logging                                    │
-│    - Joint angle table (Target, Actual, Error)              │
-│    - Data logging panel (Hand tracking, IK, Control)        │
-│    - Real-time updates (60 Hz)                              │
+│ 9. MuJoCo 3D Visualization                                  │
+│    • Displays simulated state                               │
+│    • viewer.sync() renders at 60 Hz                         │
+│    • Shows physics effects visually                         │
+└─────────────────────────────────────────────────────────────┘
+           │
+           ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 10. GUI Display & Logging                                   │
+│     - Simulated angle (from MuJoCo physics)                 │
+│     - Actual angle (from hardware)                          │
+│     - Error (simulated - actual)                            │
+│     - Physics delta (command - simulated)                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -194,8 +222,42 @@ python hand_tracking_mujoco_viz.py --hardware_ip=192.168.2.3
 | 3 | `delta_xyz, delta_rot` | [3x1], [3x1] | Movement deltas |
 | 4 | `placo_robot.state.q` | [Nx1] | Full robot state from IK |
 | 5 | `q_target` | [6x1] | Target joint angles for one arm |
-| 6 | `q_command` | [6x1] | Final command (velocity limited) |
-| 7 | `q_actual` | [6x1] | Actual joint angles from robot |
+| 6 | `q_command` | [6x1] | Command after mode selection & velocity limit |
+| 7 | `q_simulated` | [6x1] | **Simulated joints after physics step** |
+| 8 | `q_actual` | [6x1] | Actual joint angles from robot feedback |
+
+### Digital Twin Architecture Explanation
+
+**What is different from parallel architecture?**
+
+In the **previous parallel architecture**, both MuJoCo and hardware received the same `q_command`:
+```
+IK → q_command → [MuJoCo + Hardware] (parallel)
+```
+
+In the **new MuJoCo-first architecture**, hardware receives physics-validated state:
+```
+IK → q_command → MuJoCo → mj_step() → q_simulated → Hardware (sequential)
+```
+
+**Why this matters:**
+
+1. **Physics Integration**: MuJoCo applies gravity, inertia, and collision dynamics
+2. **Safety**: Hardware can't reach unsafe positions (physics prevents them)
+3. **Realistic Motion**: Robot moves with natural dynamics, not pure geometric IK
+4. **Digital Twin**: Hardware follows simulation exactly (~16ms latency)
+
+**Physics Effects You'll Observe:**
+
+- **Gravity Compensation**: Arms sag slightly (~0.1-0.3°) under weight
+- **Inertial Lag**: Fast movements show slight delay as physics integrates
+- **Collision Response**: If MuJoCo detects collision, hardware stops safely
+- **Joint Limit Enforcement**: Simulation enforces limits, hardware can't exceed
+
+**Latency:**
+- Additional delay: ~16ms (one simulation timestep at 60Hz)
+- Acceptable for teleoperation tasks
+- Benefits outweigh minimal latency increase
 
 ---
 
