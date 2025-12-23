@@ -33,6 +33,7 @@ class URController:
         servo_gain: float = SERVO_GAIN,
         gripper_force: float = GRIPPER_FORCE,
         gripper_speed: float = GRIPPER_SPEED,
+        enable_gripper: bool = True,
     ):
         self.robot_ip = robot_ip
         self.initial_joint_positions = initial_joint_positions
@@ -43,21 +44,26 @@ class URController:
         self.servo_gain = servo_gain
         self.gripper_force = gripper_force
         self.gripper_speed = gripper_speed
+        self.enable_gripper = enable_gripper
 
         self.rtde_c = rtde_control.RTDEControlInterface(robot_ip)
         self.rtde_r = rtde_receive.RTDEReceiveInterface(robot_ip)
         print(f"Connected to UR robot at {robot_ip}")
 
-        self.gripper = RobotiqGripper()
-        self.gripper.connect(robot_ip, 63352)
-        print("Gripper connected.")
+        if self.enable_gripper:
+            self.gripper = RobotiqGripper()
+            self.gripper.connect(robot_ip, 63352)
+            print("Gripper connected.")
+        else:
+            self.gripper = None
 
     def reset(self):
         print(f"Moving to initial joint positions: {self.initial_joint_positions}")
         self.rtde_c.moveJ(self.initial_joint_positions)
         print("Reached initial position.")
-        self.gripper.activate()
-        print("Gripper activated.")
+        if self.gripper:
+            self.gripper.activate()
+            print("Gripper activated.")
 
     def servo_joints(self, joint_positions: np.ndarray):
         t_start = self.rtde_c.initPeriod()
@@ -72,18 +78,20 @@ class URController:
         self.rtde_c.waitPeriod(t_start)
 
     def open_gripper(self):
-        self.gripper.move_and_wait_for_pos(
-            self.gripper.get_open_position(),
-            self.gripper_speed,
-            self.gripper_force,
-        )
+        if self.gripper:
+            self.gripper.move_and_wait_for_pos(
+                self.gripper.get_open_position(),
+                self.gripper_speed,
+                self.gripper_force,
+            )
 
     def close_gripper(self):
-        self.gripper.move_and_wait_for_pos(
-            self.gripper.get_closed_position(),
-            self.gripper_speed,
-            self.gripper_force,
-        )
+        if self.gripper:
+            self.gripper.move_and_wait_for_pos(
+                self.gripper.get_closed_position(),
+                self.gripper_speed,
+                self.gripper_force,
+            )
 
     def get_current_joint_positions(self) -> np.ndarray:
         return np.array(self.rtde_r.getActualQ())
@@ -94,7 +102,8 @@ class URController:
     def close(self):
         self.rtde_c.servoStop()
         self.rtde_c.stopScript()
-        self.gripper.disconnect()
+        if self.gripper:
+            self.gripper.disconnect()
         print("UR controller closed and gripper disconnected.")
 
     def __del__(self):
