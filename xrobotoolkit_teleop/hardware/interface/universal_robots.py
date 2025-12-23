@@ -4,8 +4,8 @@ import rtde_receive
 
 from xrobotoolkit_teleop.hardware.interface.robotiq_gripper import RobotiqGripper
 
-LEFT_ROBOT_IP = "192.168.50.55"
-RIGHT_ROBOT_IP = "192.168.50.195"
+LEFT_ROBOT_IP = "192.168.2.2"
+RIGHT_ROBOT_IP = "192.168.2.3"
 
 SERVO_TIME = 0.017
 LOOKAHEAD_TIME = 0.1

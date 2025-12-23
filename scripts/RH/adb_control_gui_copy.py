@@ -68,6 +68,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("RealHand TeleOp")
+        self.root.geometry("1200x1600")
         self.log_visible = False
         self.devices = []
         self.status_var = tk.StringVar(value="Idle")
@@ -111,7 +112,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         # ZMQ for MediaPipe hand data broadcasting
         self.hand_data_sockets = []
         self.hand_data_endpoints = []
-        self.hand_data_ip_var = tk.StringVar(value="localhost:5556")
+        self.hand_data_ip_var = tk.StringVar(value="localhost:5557")
 
         # Screenshot viewer state
         self.screenshot_window = None
@@ -179,6 +180,11 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         # Initialize XrClient and start data collection
         self.init_xr_client()
 
+        # Auto-connect to hand data endpoint on startup
+        endpoint = self.hand_data_ip_var.get().strip()
+        if endpoint and endpoint not in self.hand_data_endpoints:
+            self.root.after(1000, self.connect_hand_data_endpoint)  # Delay 1s for UI to settle
+
         # Start UI update loop
         self.update_data_display()
 
@@ -211,6 +217,10 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         style.configure("SheetHeader.TLabel", background="#e2e8f0", foreground=self.palette["text"], font=("Segoe UI", 9, "bold"), padding=4, borderwidth=1, relief="solid")
         style.configure("SheetCell.TLabel", background="white", foreground=self.palette["text"], font=("Consolas", 9), padding=4, borderwidth=1, relief="solid")
         style.configure("SheetLabel.TLabel", background="#f1f5f9", foreground=self.palette["text"], font=("Segoe UI", 9, "bold"), padding=4, borderwidth=1, relief="solid")
+
+        # Treeview Styles (for MediaPipe tab tables)
+        style.configure("Treeview", rowheight=25, font=("Consolas", 9))
+        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), padding=4)
 
 
         style.configure("Accent.TButton", background=self.palette["accent"], foreground="white", padding=6, relief="flat")
@@ -1105,6 +1115,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                 mp_right_disp = mp_right if (mp_right is not None and not stale and status == 'OK') else (mp_right_last if mp_right_last is not None else mp_right)
                 endpoints = list(self.rotation_endpoints)
                 self.update_mediapipe_send_badge(active=not stale and status == 'OK', stale=stale, endpoints=endpoints)
+                self.update_mediapipe_rotation_data(yaw, pitch, roll)
                 self.update_mediapipe_table("left", mp_left_disp)
                 self.update_mediapipe_table("right", mp_right_disp)
 

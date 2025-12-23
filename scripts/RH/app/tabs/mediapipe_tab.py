@@ -3,20 +3,72 @@
 from tkinter import ttk
 
 
+# MediaPipe hand landmark names (21 landmarks per hand)
+MEDIAPIPE_JOINT_NAMES = [
+    "WRIST",
+    "THUMB_CMC",
+    "THUMB_MCP",
+    "THUMB_IP",
+    "THUMB_TIP",
+    "INDEX_MCP",
+    "INDEX_PIP",
+    "INDEX_DIP",
+    "INDEX_TIP",
+    "MIDDLE_MCP",
+    "MIDDLE_PIP",
+    "MIDDLE_DIP",
+    "MIDDLE_TIP",
+    "RING_MCP",
+    "RING_PIP",
+    "RING_DIP",
+    "RING_TIP",
+    "PINKY_MCP",
+    "PINKY_PIP",
+    "PINKY_DIP",
+    "PINKY_TIP",
+]
+
+
 class MediaPipeTabMixin:
     def build_mediapipe_tab(self, parent: ttk.Frame):
         """Display MediaPipe-converted hand keypoints for both hands."""
         self.mediapipe_tables = {}
-        status_row = ttk.Frame(parent)
-        status_row.grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4), sticky="ew")
-        status_row.columnconfigure(0, weight=1)
-        status_row.columnconfigure(1, weight=0)
 
-        self.mediapipe_target_label = ttk.Label(status_row, text="Targets: none", style="TLabel")
-        self.mediapipe_target_label.grid(column=0, row=0, sticky="w")
+        # Status and rotation data section at the top
+        top_section = ttk.Frame(parent, style="Surface.TFrame")
+        top_section.grid(row=0, column=0, columnspan=2, padx=8, pady=(8, 4), sticky="ew")
+        top_section.columnconfigure(0, weight=1)
+        top_section.columnconfigure(1, weight=0)
 
-        self.mediapipe_send_badge = ttk.Label(status_row, text="Send: idle", style="BadgeIdle.TLabel")
-        self.mediapipe_send_badge.grid(column=1, row=0, sticky="e")
+        # Left column: Rotation data display
+        rotation_frame = ttk.LabelFrame(top_section, text="Head Rotation Data", style="Section.TLabelframe")
+        rotation_frame.grid(row=0, column=0, padx=(0, 4), pady=0, sticky="ew")
+        rotation_frame.columnconfigure(0, weight=0)
+        rotation_frame.columnconfigure(1, weight=1)
+
+        # Create rotation data labels with proper spacing
+        ttk.Label(rotation_frame, text="Yaw:", font=("TkDefaultFont", 9, "bold")).grid(row=0, column=0, padx=(8, 4), pady=4, sticky="w")
+        self.mediapipe_yaw_label = ttk.Label(rotation_frame, text="0.0°", style="TLabel")
+        self.mediapipe_yaw_label.grid(row=0, column=1, padx=(0, 8), pady=4, sticky="w")
+
+        ttk.Label(rotation_frame, text="Pitch:", font=("TkDefaultFont", 9, "bold")).grid(row=1, column=0, padx=(8, 4), pady=4, sticky="w")
+        self.mediapipe_pitch_label = ttk.Label(rotation_frame, text="0.0°", style="TLabel")
+        self.mediapipe_pitch_label.grid(row=1, column=1, padx=(0, 8), pady=4, sticky="w")
+
+        ttk.Label(rotation_frame, text="Roll:", font=("TkDefaultFont", 9, "bold")).grid(row=2, column=0, padx=(8, 4), pady=4, sticky="w")
+        self.mediapipe_roll_label = ttk.Label(rotation_frame, text="0.0°", style="TLabel")
+        self.mediapipe_roll_label.grid(row=2, column=1, padx=(0, 8), pady=4, sticky="w")
+
+        # Right column: Targets and status
+        status_frame = ttk.LabelFrame(top_section, text="Connection Status", style="Section.TLabelframe")
+        status_frame.grid(row=0, column=1, padx=(4, 0), pady=0, sticky="nsew")
+        status_frame.columnconfigure(0, weight=1)
+
+        self.mediapipe_target_label = ttk.Label(status_frame, text="Targets: none", style="TLabel", wraplength=250)
+        self.mediapipe_target_label.grid(column=0, row=0, padx=8, pady=(8, 4), sticky="w")
+
+        self.mediapipe_send_badge = ttk.Label(status_frame, text="Send: idle", style="BadgeIdle.TLabel")
+        self.mediapipe_send_badge.grid(column=0, row=1, padx=8, pady=(4, 8), sticky="w")
 
         def build_table(col: int, title: str, key: str):
             frame = ttk.LabelFrame(parent, text=title, style="Section.TLabelframe")
@@ -26,11 +78,11 @@ class MediaPipeTabMixin:
 
             columns = ("joint", "x", "y", "z")
             tree = ttk.Treeview(frame, columns=columns, show="headings", height=22)
-            tree.heading("joint", text="Joint #")
+            tree.heading("joint", text="Joint Name")
             tree.heading("x", text="X (rel)")
             tree.heading("y", text="Y (rel)")
             tree.heading("z", text="Z (rel)")
-            tree.column("joint", width=60, anchor="center")
+            tree.column("joint", width=120, anchor="w")
             tree.column("x", width=80, anchor="e")
             tree.column("y", width=80, anchor="e")
             tree.column("z", width=80, anchor="e")
@@ -40,9 +92,10 @@ class MediaPipeTabMixin:
             tree.grid(row=0, column=0, sticky="nsew")
             vsb.grid(row=0, column=1, sticky="ns")
 
-            # Pre-populate rows
+            # Pre-populate rows with joint names
             for idx in range(21):
-                tree.insert("", "end", iid=str(idx), values=(idx, "--", "--", "--"))
+                joint_name = MEDIAPIPE_JOINT_NAMES[idx] if idx < len(MEDIAPIPE_JOINT_NAMES) else f"Joint {idx}"
+                tree.insert("", "end", iid=str(idx), values=(joint_name, "--", "--", "--"))
 
             self.mediapipe_tables[key] = tree
 
@@ -107,3 +160,12 @@ class MediaPipeTabMixin:
         targets_text = ", ".join(targets) if targets else "none"
         if hasattr(self, "mediapipe_target_label"):
             self.mediapipe_target_label.configure(text=f"Targets: {targets_text}")
+
+    def update_mediapipe_rotation_data(self, yaw: float, pitch: float, roll: float):
+        """Update rotation data labels in MediaPipe tab."""
+        if hasattr(self, "mediapipe_yaw_label"):
+            self.mediapipe_yaw_label.configure(text=f"{yaw:.1f}°")
+        if hasattr(self, "mediapipe_pitch_label"):
+            self.mediapipe_pitch_label.configure(text=f"{pitch:.1f}°")
+        if hasattr(self, "mediapipe_roll_label"):
+            self.mediapipe_roll_label.configure(text=f"{roll:.1f}°")

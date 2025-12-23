@@ -106,7 +106,7 @@ This GUI application provides a comprehensive control interface for managing VR 
 conda activate xr-robotics  # or: source venv/bin/activate
 
 # Run the ADB Control GUI
-python scripts/RH/adb_control_gui.py
+python scripts/RH/adb_control_gui_copy.py
 ```
 
 **Features:**
@@ -698,7 +698,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 source venv/bin/activate          # or: conda activate xr-robotics
 
 # Run ADB Control GUI (VR Headset Management)
-python scripts/RH/adb_control_gui.py
+python scripts/RH/adb_control_gui_copy.py
 
 # Run Head Rotation Sender (Main Demo)
 python scripts/RH/test_head_rotation_sender.py
