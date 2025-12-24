@@ -36,11 +36,25 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.dt = 1.0 / 60.0  # Assume 60Hz control loop
         self.last_update_time = None
 
+        # Headset tracking for relative hand positioning
+        self.headset_position = None      # Current headset position [x, y, z]
+        self.headset_quat = None          # Current headset quaternion [qx, qy, qz, qw]
+        self.headset_yaw = 0.0            # Current headset yaw angle (around Y axis)
+        self.headset_yaw_ref = 0.0        # Reference yaw for forward direction (set by reset button)
+        self.use_headset_relative = True  # Enable headset-relative positioning
+
         # Logging data
         self.log_data = {
+            'headset': {
+                'position': None,
+                'yaw': None,
+                'yaw_reference': None,
+            },
             'hand_tracking': {
-                'left_hand_pose': None,
-                'right_hand_pose': None,
+                'left_hand_pose': None,           # World space
+                'right_hand_pose': None,          # World space
+                'left_hand_relative': None,       # Headset-relative
+                'right_hand_relative': None,      # Headset-relative
                 'left_hand_delta': None,
                 'right_hand_delta': None,
             },
@@ -80,6 +94,28 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         
         self.status_label = tk.Label(self.gui_root, text="Status: Disconnected", fg="red", font=("Arial", 10, "bold"))
         self.status_label.pack(pady=5)
+
+        # Reset Forward Direction button
+        self.reset_forward_btn = tk.Button(
+            self.gui_root,
+            text="Reset Forward Direction",
+            command=self._reset_forward_direction,
+            font=("Arial", 11),
+            bg="#FFA500",  # Orange background
+            fg="white",
+            state="disabled"  # Enable when hand tracking starts
+        )
+        self.reset_forward_btn.pack(pady=5, padx=20, fill="x")
+
+        # Forward direction status label
+        self.forward_direction_label = tk.Label(
+            self.gui_root,
+            text="Forward Direction: Not Set",
+            font=("Arial", 9),
+            fg="gray",
+            bg="white"
+        )
+        self.forward_direction_label.pack(pady=2)
 
         # Create frame for joint angle displays
         self.angles_frame = tk.LabelFrame(self.gui_root, text="Joint Angles (degrees)", padx=10, pady=10)
@@ -189,6 +225,17 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             self.status_label.config(text="Status: Hand Tracking (Viz Only)", fg="blue")
         print(f"Hand tracking control STARTED. Connected: {self.is_connected}")
 
+        # Initialize headset reference on start
+        headset_pose = self.xr_client.get_pose_by_name("headset")
+        if headset_pose is not None:
+            headset_quat = np.array([headset_pose[3], headset_pose[4], headset_pose[5], headset_pose[6]])
+            qw, qx, qy, qz = headset_quat[3], headset_quat[0], headset_quat[1], headset_quat[2]
+            self.headset_yaw_ref = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+            print(f"[HEADSET] Initial forward direction: {np.degrees(self.headset_yaw_ref):.1f}°")
+
+        # Enable reset forward button
+        self.reset_forward_btn.config(state="normal")
+
     def toggle_manual_control(self):
         if self.is_connected:
             self.control_mode = "manual"
@@ -216,12 +263,174 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.status_label.config(text="Status: STOPPED", fg="red")
         print("Hardware control STOPPED (Emergency).")
 
+        # Disable reset forward button
+        self.reset_forward_btn.config(state="disabled")
+
         if self.rtde_c:
             try:
                 self.rtde_c.servoStop()
             except Exception as e:
                 print(f"Error stopping hardware: {e}")
 
+    def _reset_forward_direction(self):
+        """
+        Reset the forward direction reference based on current headset orientation.
+
+        Captures current headset yaw (rotation around Y axis) and sets it as the
+        new forward direction. Hand movements after reset are relative to this
+        new forward direction.
+
+        Note: Robot does NOT move - only the coordinate frame rotation changes.
+        """
+        # Get current headset pose
+        headset_pose = self.xr_client.get_pose_by_name("headset")
+
+        if headset_pose is None:
+            print("ERROR: Cannot reset forward direction - headset pose not available")
+            return
+
+        # Extract quaternion (qx, qy, qz, qw)
+        headset_quat = np.array([headset_pose[3], headset_pose[4], headset_pose[5], headset_pose[6]])
+
+        # Calculate yaw angle from quaternion
+        # Yaw = atan2(2*(qw*qz + qx*qy), 1 - 2*(qy^2 + qz^2))
+        qw, qx, qy, qz = headset_quat[3], headset_quat[0], headset_quat[1], headset_quat[2]
+        yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+
+        # Store as new reference
+        self.headset_yaw_ref = yaw
+
+        # Update GUI
+        yaw_deg = np.degrees(yaw)
+        self.forward_direction_label.config(
+            text=f"Forward Direction: {yaw_deg:.1f}° (Reset)",
+            fg="green"
+        )
+
+        print(f"[HEADSET] Forward direction reset to {yaw_deg:.1f}° (yaw)")
+
+    def _update_headset_tracking(self):
+        """
+        Update current headset position and orientation.
+
+        Called every frame to track headset movement for headset-relative
+        hand positioning.
+        """
+        headset_pose = self.xr_client.get_pose_by_name("headset")
+
+        if headset_pose is None:
+            return
+
+        # Extract position and quaternion
+        self.headset_position = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
+        self.headset_quat = np.array([headset_pose[3], headset_pose[4], headset_pose[5], headset_pose[6]])
+
+        # Calculate current yaw
+        qw, qx, qy, qz = self.headset_quat[3], self.headset_quat[0], self.headset_quat[1], self.headset_quat[2]
+        self.headset_yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz))
+
+        # Log headset data
+        self.log_data['headset']['position'] = self.headset_position.copy()
+        self.log_data['headset']['yaw'] = self.headset_yaw
+        self.log_data['headset']['yaw_reference'] = self.headset_yaw_ref
+
+        # Update forward direction label (show current vs reference)
+        yaw_delta_deg = np.degrees(self.headset_yaw - self.headset_yaw_ref)
+        self.forward_direction_label.config(
+            text=f"Forward: {np.degrees(self.headset_yaw_ref):.1f}° | Current: {np.degrees(self.headset_yaw):.1f}° (Δ{yaw_delta_deg:+.1f}°)"
+        )
+
+    def _process_xr_pose(self, src_name: str, config: dict):
+        """
+        Override parent method to apply headset-relative transformation.
+
+        Transforms hand poses to be relative to headset position and orientation
+        before calculating deltas.
+
+        Args:
+            src_name: Manipulator name (e.g., "left_hand", "right_hand")
+            config: Manipulator configuration dict
+
+        Returns:
+            (delta_xyz, delta_rot): Position and rotation deltas
+        """
+        pose_source = config.get("pose_source", "")
+
+        # Get raw hand pose from XR device
+        hand_pose_world = self.xr_client.get_pose_by_name(pose_source)
+
+        if hand_pose_world is None:
+            return None, None
+
+        # Extract hand position and quaternion (world space)
+        hand_xyz_world = np.array([hand_pose_world[0], hand_pose_world[1], hand_pose_world[2]])
+        hand_quat_world = np.array([hand_pose_world[3], hand_pose_world[4], hand_pose_world[5], hand_pose_world[6]])
+
+        # Log world space hand pose
+        if "left" in src_name.lower():
+            self.log_data['hand_tracking']['left_hand_pose'] = hand_pose_world.copy()
+        elif "right" in src_name.lower():
+            self.log_data['hand_tracking']['right_hand_pose'] = hand_pose_world.copy()
+
+        # Transform to headset-relative coordinates if enabled
+        if self.use_headset_relative and self.headset_position is not None:
+            # 1. Calculate position relative to headset
+            hand_xyz_relative = hand_xyz_world - self.headset_position
+
+            # 2. Rotate by negative headset yaw + reference yaw to align with forward direction
+            # This makes hand movements relative to current facing direction
+            yaw_rotation = -(self.headset_yaw - self.headset_yaw_ref)
+
+            # Create rotation matrix around Y axis
+            cos_yaw = np.cos(yaw_rotation)
+            sin_yaw = np.sin(yaw_rotation)
+            R_yaw = np.array([
+                [cos_yaw,  0, sin_yaw],
+                [0,        1, 0      ],
+                [-sin_yaw, 0, cos_yaw]
+            ])
+
+            # Apply rotation to hand position
+            hand_xyz_relative = R_yaw @ hand_xyz_relative
+
+            # Log headset-relative position
+            if "left" in src_name.lower():
+                self.log_data['hand_tracking']['left_hand_relative'] = hand_xyz_relative.copy()
+            elif "right" in src_name.lower():
+                self.log_data['hand_tracking']['right_hand_relative'] = hand_xyz_relative.copy()
+
+            # Use headset-relative position for further processing
+            controller_xyz = hand_xyz_relative
+            controller_quat = hand_quat_world  # Rotation can stay in world space for now
+
+        else:
+            # Fallback: use world space (original behavior)
+            controller_xyz = hand_xyz_world
+            controller_quat = hand_quat_world
+
+        # Apply static headset-to-world rotation (existing behavior)
+        controller_xyz = self.R_headset_world @ controller_xyz
+
+        # Initialize reference on first call
+        if src_name not in self.ref_controller_xyz:
+            self.ref_controller_xyz[src_name] = controller_xyz.copy()
+            self.ref_controller_quat[src_name] = controller_quat.copy()
+            return np.zeros(3), np.zeros(3)
+
+        # Calculate delta from reference
+        delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
+
+        # Calculate rotation delta (existing method)
+        from xrobotoolkit_teleop.utils.geometry import quat_diff_as_angle_axis
+        delta_rot = quat_diff_as_angle_axis(self.ref_controller_quat[src_name], controller_quat)
+
+        # Store deltas for logging
+        if "left" in src_name.lower():
+            self.log_data['hand_tracking']['left_hand_delta'] = np.concatenate([delta_xyz, delta_rot])
+        elif "right" in src_name.lower():
+            self.log_data['hand_tracking']['right_hand_delta'] = np.concatenate([delta_xyz, delta_rot])
+
+        return delta_xyz, delta_rot
 
     def _placo_setup(self):
         super()._placo_setup()
@@ -473,19 +682,38 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                 if self.log_data['ik_result']['velocity_limited']:
                     log_output.append("  ⚠️  VELOCITY LIMITED!")
 
+        # Headset Tracking Data
+        if self.log_data['headset']['position'] is not None:
+            log_output.append("\n[HEADSET TRACKING]")
+            pos = self.log_data['headset']['position']
+            log_output.append(f"  Position (m):     [{pos[0]:>7.4f}, {pos[1]:>7.4f}, {pos[2]:>7.4f}]")
+
+            yaw_current = self.log_data['headset']['yaw']
+            yaw_ref = self.log_data['headset']['yaw_reference']
+            if yaw_current is not None and yaw_ref is not None:
+                log_output.append(f"  Current Yaw:      {np.degrees(yaw_current):>7.2f}°")
+                log_output.append(f"  Reference Yaw:    {np.degrees(yaw_ref):>7.2f}°")
+                log_output.append(f"  Yaw Delta:        {np.degrees(yaw_current - yaw_ref):>+7.2f}°")
+
         # Hand Tracking Data (if available)
         if self.control_mode == "hand_tracking":
             log_output.append("\n[HAND TRACKING INPUT]")
 
             for hand_name in ['left_hand', 'right_hand']:
                 pose_key = f'{hand_name}_pose'
+                relative_key = f'{hand_name}_relative'
                 delta_key = f'{hand_name}_delta'
 
                 if self.log_data['hand_tracking'][pose_key] is not None:
                     pose = self.log_data['hand_tracking'][pose_key]
-                    log_output.append(f"  {hand_name.upper().replace('_', ' ')}:")
+                    log_output.append(f"  {hand_name.upper().replace('_', ' ')} (World):")
                     log_output.append(f"    Position (m):  [{pose[0]:>7.4f}, {pose[1]:>7.4f}, {pose[2]:>7.4f}]")
                     log_output.append(f"    Quaternion:    [{pose[3]:>7.4f}, {pose[4]:>7.4f}, {pose[5]:>7.4f}, {pose[6]:>7.4f}]")
+
+                if self.log_data['hand_tracking'][relative_key] is not None:
+                    rel_pos = self.log_data['hand_tracking'][relative_key]
+                    log_output.append(f"  {hand_name.upper().replace('_', ' ')} (Headset-Relative):")
+                    log_output.append(f"    Position (m):  [{rel_pos[0]:>7.4f}, {rel_pos[1]:>7.4f}, {rel_pos[2]:>7.4f}]")
 
                 if self.log_data['hand_tracking'][delta_key] is not None:
                     delta = self.log_data['hand_tracking'][delta_key]
@@ -577,6 +805,9 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
                     # STEP 2.5: Log hand tracking data (before IK)
                     self._log_hand_tracking_data()
+
+                    # STEP 2.6: Update headset tracking (for headset-relative positioning)
+                    self._update_headset_tracking()
 
                     # STEP 3: Process hand tracking and run IK solver
                     self._update_ik()
