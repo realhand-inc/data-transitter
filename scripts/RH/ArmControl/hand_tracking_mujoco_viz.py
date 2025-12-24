@@ -1,5 +1,6 @@
 import os
 import tkinter as tk
+from tkinter import ttk
 import threading
 import time
 import math
@@ -81,18 +82,30 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                 'error': None,
             }
         }
+        self.ik_display = {
+            "left_hand": {"target_pos": None, "target_quat": None, "q_target": None},
+            "right_hand": {"target_pos": None, "target_quat": None, "q_target": None},
+        }
+        self.control_arm_key = None
 
         # Setup GUI
         self.gui_root = tk.Tk()
         self.gui_root.tk.call("tk", "scaling", 2.0)
         self.gui_root.title(f"Linear Pipeline Control - {self.hardware_ip}")
         self.gui_root.geometry("800x1000")  # Increased for logging panel
-        
-        self.connect_btn = tk.Button(self.gui_root, text="Connect to Robot", command=self.connect, bg="blue", fg="white", font=("Arial", 12))
+
+        self.gui_tabs = ttk.Notebook(self.gui_root)
+        self.main_tab = ttk.Frame(self.gui_tabs)
+        self.ik_tab = ttk.Frame(self.gui_tabs)
+        self.gui_tabs.add(self.main_tab, text="Control")
+        self.gui_tabs.add(self.ik_tab, text="IK Target")
+        self.gui_tabs.pack(fill="both", expand=True)
+
+        self.connect_btn = tk.Button(self.main_tab, text="Connect to Robot", command=self.connect, bg="blue", fg="white", font=("Arial", 12))
         self.connect_btn.pack(pady=10, fill="x", padx=20)
 
         # Mode Selection Frame
-        mode_frame = tk.Frame(self.gui_root)
+        mode_frame = tk.Frame(self.main_tab)
         mode_frame.pack(fill="x", padx=20, pady=5)
 
         self.start_btn = tk.Button(mode_frame, text="Start Hand Tracking", command=self.start_control, bg="green", fg="white", font=("Arial", 12), state="normal", width=20)
@@ -101,13 +114,13 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.manual_btn = tk.Button(mode_frame, text="Manual Control", command=self.toggle_manual_control, bg="purple", fg="white", font=("Arial", 12), state="disabled", width=20)
         self.manual_btn.pack(side="right", padx=5, fill="x", expand=True)
         
-        self.stop_btn = tk.Button(self.gui_root, text="EMERGENCY STOP", command=self.emergency_stop, bg="red", fg="white", font=("Arial", 12, "bold"), state="disabled")
+        self.stop_btn = tk.Button(self.main_tab, text="EMERGENCY STOP", command=self.emergency_stop, bg="red", fg="white", font=("Arial", 12, "bold"), state="disabled")
         self.stop_btn.pack(pady=5, fill="x", padx=20)
 
         # Send to Hardware toggle
         self.send_hardware_var = tk.BooleanVar(value=False)  # Default: OFF (viz-only mode)
         self.send_hardware_checkbox = tk.Checkbutton(
-            self.gui_root,
+            self.main_tab,
             text="Send to Hardware",
             variable=self.send_hardware_var,
             command=self._toggle_hardware_send,
@@ -119,7 +132,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
         # Add warning label
         self.hardware_warning_label = tk.Label(
-            self.gui_root,
+            self.main_tab,
             text="✓  Visualization-only mode (safe)",
             font=("Arial", 9),
             fg="green",
@@ -127,12 +140,12 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         )
         self.hardware_warning_label.pack(pady=2)
 
-        self.status_label = tk.Label(self.gui_root, text="Status: Disconnected", fg="red", font=("Arial", 10, "bold"))
+        self.status_label = tk.Label(self.main_tab, text="Status: Disconnected", fg="red", font=("Arial", 10, "bold"))
         self.status_label.pack(pady=5)
 
         # Reset Forward Direction button
         self.reset_forward_btn = tk.Button(
-            self.gui_root,
+            self.main_tab,
             text="Reset Forward Direction",
             command=self._reset_forward_direction,
             font=("Arial", 11),
@@ -144,7 +157,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
         # Forward direction status label
         self.forward_direction_label = tk.Label(
-            self.gui_root,
+            self.main_tab,
             text="Forward Direction: Not Set",
             font=("Arial", 9),
             fg="gray",
@@ -153,7 +166,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.forward_direction_label.pack(pady=2)
 
         # Create frame for joint angle displays
-        self.angles_frame = tk.LabelFrame(self.gui_root, text="Joint Angles (degrees)", padx=10, pady=10)
+        self.angles_frame = tk.LabelFrame(self.main_tab, text="Joint Angles (degrees)", padx=10, pady=10)
         self.angles_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
         # Header
@@ -182,7 +195,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             })
 
         # Logging display frame
-        self.log_frame = tk.LabelFrame(self.gui_root, text="Data Logging", padx=10, pady=10)
+        self.log_frame = tk.LabelFrame(self.main_tab, text="Data Logging", padx=10, pady=10)
         self.log_frame.pack(fill="both", expand=True, padx=20, pady=5)
 
         # Create text widget for logging with scrollbar
@@ -197,7 +210,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.log_text.config(state="disabled")
 
         # Sliders Frame (Initially hidden)
-        self.sliders_frame = tk.LabelFrame(self.gui_root, text="Manual Joint Control", padx=10, pady=10)
+        self.sliders_frame = tk.LabelFrame(self.main_tab, text="Manual Joint Control", padx=10, pady=10)
         self.sliders = []
         self.slider_labels = []
 
@@ -213,6 +226,12 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             slider = tk.Scale(frame, from_=-360, to=360, orient="horizontal", length=400, command=lambda val, idx=i: self.on_slider_change(idx, val))
             slider.pack(side="right", fill="x", expand=True)
             self.sliders.append(slider)
+
+        # IK Target display tab
+        self.ik_text = tk.Text(self.ik_tab, height=16, font=("Courier", 9), bg="#f7f7f7")
+        self.ik_text.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        self.ik_text.insert("1.0", "Waiting for IK target data...\n")
+        self.ik_text.config(state="disabled")
 
         # Initialize parent
         super().__init__(*args, **kwargs)
@@ -472,8 +491,12 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             # Log headset-relative position (pure relative, rotated by headset angle)
             if "left" in src_name.lower():
                 self.log_data['hand_tracking']['left_hand_relative'] = hand_xyz_relative_rot.copy()
+                display_key = "left_hand"
             elif "right" in src_name.lower():
                 self.log_data['hand_tracking']['right_hand_relative'] = hand_xyz_relative_rot.copy()
+                display_key = "right_hand"
+            else:
+                display_key = None
 
             # Use headset-relative position for further processing
             controller_xyz = hand_xyz_relative
@@ -483,10 +506,20 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             # Fallback: use world space (original behavior)
             controller_xyz = hand_xyz_world
             controller_quat = hand_quat_world
+            display_key = None
 
         # Apply static headset-to-world rotation (existing behavior)
         controller_xyz = self.R_headset_world @ controller_xyz
         controller_xyz[2] = -controller_xyz[2]
+
+        # Sphere position (MuJoCo): head marker base + remapped relative vector.
+        head_pos = np.array([0.0, CAMERA_HEIGHT_M, 0.0], dtype=float)
+        target_mj = None
+        if self.use_headset_relative and self.headset_position is not None:
+            target_mj = head_pos + self._map_relative_to_mujoco(hand_xyz_relative_rot)
+            if display_key is not None:
+                self.ik_display[display_key]["target_pos"] = target_mj.copy()
+                self.ik_display[display_key]["target_quat"] = controller_quat.copy()
 
         # Initialize reference on first call
         if self.ref_controller_xyz.get(src_name) is None:
@@ -494,8 +527,11 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             self.ref_controller_quat[src_name] = controller_quat.copy()
             return np.zeros(3), np.zeros(3)
 
-        # Calculate delta from reference
-        delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
+        # Target TCP position is the sphere position.
+        if target_mj is not None and self.ref_ee_xyz.get(src_name) is not None:
+            delta_xyz = target_mj - self.ref_ee_xyz[src_name]
+        else:
+            delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
 
         # Calculate rotation delta (existing method)
         from xrobotoolkit_teleop.utils.geometry import quat_diff_as_angle_axis
@@ -518,6 +554,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
             prefix = "right"
         
         print(f"Hardware IP: {self.hardware_ip} -> Selecting {prefix} arm joints.")
+        self.control_arm_key = f"{prefix}_hand"
 
         # Identify arm joint indices in Placo
         joint_names = [
@@ -649,6 +686,8 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                 self.q_target = np.array([self.placo_robot.state.q[i] for i in self.arm_joint_indices])
                 # Log IK result
                 self.log_data['ik_result']['q_target'] = self.q_target.copy()
+                if self.control_arm_key in self.ik_display:
+                    self.ik_display[self.control_arm_key]["q_target"] = self.q_target.copy()
 
             except IndexError as e:
                 print(f"IndexError in _extract_q_target_from_ik: {e}")
@@ -857,6 +896,49 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         self.log_text.config(state="disabled")
         self.log_text.see("1.0")  # Scroll to top
 
+    def _update_ik_display(self):
+        """Update the IK target display tab."""
+        self.ik_text.config(state="normal")
+        self.ik_text.delete("1.0", "end")
+
+        output = []
+        output.append("=" * 70)
+        output.append("  IK TARGET SUMMARY")
+        output.append("=" * 70)
+
+        for hand_key in ["left_hand", "right_hand"]:
+            label = hand_key.upper().replace("_", " ")
+            target_pos = self.ik_display[hand_key]["target_pos"]
+            target_quat = self.ik_display[hand_key]["target_quat"]
+            q_target = self.ik_display[hand_key]["q_target"]
+
+            output.append(f"\n[{label}]")
+            if target_pos is not None:
+                output.append(
+                    f"Target Pos (m): [{target_pos[0]:>7.4f}, {target_pos[1]:>7.4f}, {target_pos[2]:>7.4f}]"
+                )
+            else:
+                output.append("Target Pos (m): [    N/A,    N/A,    N/A]")
+
+            if target_quat is not None:
+                output.append(
+                    f"Target Quat:    [{target_quat[0]:>7.4f}, {target_quat[1]:>7.4f}, {target_quat[2]:>7.4f}, {target_quat[3]:>7.4f}]"
+                )
+            else:
+                output.append("Target Quat:    [    N/A,    N/A,    N/A,    N/A]")
+
+            if q_target is not None:
+                output.append(
+                    f"IK Joints (rad):[{', '.join([f'{x:>7.4f}' for x in q_target])}]"
+                )
+            else:
+                output.append("IK Joints (rad):[    N/A,    N/A,    N/A,    N/A,    N/A,    N/A]")
+
+        output.append("\n" + "=" * 70)
+
+        self.ik_text.insert("1.0", "\n".join(output))
+        self.ik_text.config(state="disabled")
+
     def _select_command_based_on_mode(self):
         """LINEAR PIPELINE: Select q_command based on control mode with velocity limiting."""
         q_desired = None
@@ -940,6 +1022,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
                     # STEP 7: Update GUI displays
                     self._update_gui_display()       # Joint angle table
                     self._update_log_display()       # Logging panel
+                    self._update_ik_display()        # IK target tab
                     self.gui_root.update()
 
                     # STEP 8: Step simulation and render
