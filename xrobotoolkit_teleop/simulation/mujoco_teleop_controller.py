@@ -155,8 +155,8 @@ class MujocoTeleopController(BaseTeleopController):
                 try:
                     self._update_robot_state()
                     self._update_ik()
-                    self._update_gripper_target()
-                    self._update_mocap_target()
+                    # self._update_gripper_target()
+                    # self._update_mocap_target()
                     self._send_command()
 
                     # Step simulation and update viewer
