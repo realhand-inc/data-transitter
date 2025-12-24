@@ -486,6 +486,7 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
         # Apply static headset-to-world rotation (existing behavior)
         controller_xyz = self.R_headset_world @ controller_xyz
+        controller_xyz[2] = -controller_xyz[2]
 
         # Initialize reference on first call
         if self.ref_controller_xyz.get(src_name) is None:
@@ -542,6 +543,21 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
     def _robot_setup(self):
         super()._robot_setup()
+
+    def _update_mocap_target(self):
+        """Update MuJoCo mocap targets for both pose and position tasks."""
+        for name, task in self.effector_task.items():
+            mocap_idx = self.target_mocap_idx.get(name)
+            if mocap_idx is None or mocap_idx == -1:
+                continue
+
+            if hasattr(task, "T_world_frame"):
+                T_world_target = task.T_world_frame
+                self.mj_data.mocap_pos[mocap_idx] = T_world_target[:3, 3]
+                self.mj_data.mocap_quat[mocap_idx] = np.array([1.0, 0.0, 0.0, 0.0])
+            elif hasattr(task, "target_world"):
+                self.mj_data.mocap_pos[mocap_idx] = task.target_world
+                self.mj_data.mocap_quat[mocap_idx] = np.array([1.0, 0.0, 0.0, 0.0])
 
     def _log_hand_tracking_data(self):
         """Capture and log hand tracking data before IK processing."""
