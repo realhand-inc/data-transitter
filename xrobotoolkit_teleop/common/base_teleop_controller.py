@@ -186,15 +186,37 @@ class BaseTeleopController(abc.ABC):
         self.placo_robot.update_kinematics()
 
         for src_name, config in self.manipulator_config.items():
-            xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
-            self.active[src_name] = xr_grip_val > 0.9
+            # Check if control_trigger is specified (for controller-based control)
+            # If not specified, check if pose source is available (for hand tracking)
+            if "control_trigger" in config:
+                xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
+                self.active[src_name] = xr_grip_val > 0.9
+            else:
+                # No trigger specified - check if pose source is available
+                # For hand tracking, this will be False until hands are visible
+                try:
+                    xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                    self.active[src_name] = True
+                except ValueError:
+                    # Hand tracking inactive - wait for it to become active
+                    self.active[src_name] = False
+                    if self.ref_ee_xyz[src_name] is not None:
+                        # Was active before, now inactive
+                        print(f"{src_name} is deactivated (hand tracking lost).")
+                        self.ref_ee_xyz[src_name] = None
+                        self.ref_controller_xyz[src_name] = None
+                    continue
 
             if self.active[src_name]:
                 if self.ref_ee_xyz[src_name] is None:
                     print(f"{src_name} is activated.")
                     self.ref_ee_xyz[src_name], self.ref_ee_quat[src_name] = self._get_link_pose(config["link_name"])
 
-                xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                # Get pose (already retrieved above if no trigger, so cache it)
+                if "control_trigger" in config:
+                    xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                # else: xr_pose already retrieved above
+
                 delta_xyz, delta_rot = self._process_xr_pose(xr_pose, src_name)
                 
                 if self.effector_control_mode[src_name] == "position":

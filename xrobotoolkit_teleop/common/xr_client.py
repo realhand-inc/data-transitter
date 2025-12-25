@@ -12,7 +12,8 @@ class XrClient:
 
     def get_pose_by_name(self, name: str) -> np.ndarray:
         """Returns the pose of the specified device by name.
-        Valid names: "left_controller", "right_controller", "headset".
+        Valid names: "left_controller", "right_controller", "headset",
+                     "left_hand_wrist", "right_hand_wrist".
         Pose is [x, y, z, qx, qy, qz, qw]."""
         if name == "left_controller":
             return xrt.get_left_controller_pose()
@@ -20,9 +21,20 @@ class XrClient:
             return xrt.get_right_controller_pose()
         elif name == "headset":
             return xrt.get_headset_pose()
+        elif name == "left_hand_wrist":
+            hand_state = self.get_hand_tracking_state("left")
+            if hand_state is None:
+                raise ValueError("Left hand tracking inactive (low quality). Cannot get wrist pose.")
+            return hand_state[1]  # Index 1 = Wrist joint
+        elif name == "right_hand_wrist":
+            hand_state = self.get_hand_tracking_state("right")
+            if hand_state is None:
+                raise ValueError("Right hand tracking inactive (low quality). Cannot get wrist pose.")
+            return hand_state[1]  # Index 1 = Wrist joint
         else:
             raise ValueError(
-                f"Invalid name: {name}. Valid names are: 'left_controller', 'right_controller', 'headset'."
+                f"Invalid name: {name}. Valid names are: 'left_controller', "
+                "'right_controller', 'headset', 'left_hand_wrist', 'right_hand_wrist'."
             )
 
     def get_key_value_by_name(self, name: str) -> float:
