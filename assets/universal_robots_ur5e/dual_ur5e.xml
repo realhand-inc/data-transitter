@@ -69,7 +69,7 @@
         </body>
 
         <!-- Left Arm -->
-        <body name="left_robot_base" pos="0 0.275 0.3" quat="0 0 0.3826834 0.9238795" childclass="ur5e">
+        <body name="left_robot_base" pos="0 0.275 0.3" quat="1 0 0 0" childclass="ur5e">
             <inertial mass="4" pos="0 0 0" diaginertia="0.00443333156 0.00443333156 0.0072"/>
             <geom mesh="base_0" material="black" class="visual"/>
             <geom mesh="base_1" material="jointgray" class="visual"/>
