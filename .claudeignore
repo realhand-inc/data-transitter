@@ -22,5 +22,4 @@ __pycache__/
 
 scripts/simulation
 
-scripts/RH/ArmControl
 scripts/RH/app

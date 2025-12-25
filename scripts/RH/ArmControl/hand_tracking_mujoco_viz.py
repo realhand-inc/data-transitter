@@ -440,6 +440,35 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
         if xr_pose is None:
             return None, None
 
+        # --- ROTATE INPUT DATA 90 DEGREES AROUND Z AXIS ---
+        # Create a copy to avoid modifying the original object
+        xr_pose_mod = np.array(xr_pose, dtype=float, copy=True)
+
+        # 1. Position Rotation (x, y, z) -> (-y, x, z)
+        orig_x, orig_y = xr_pose_mod[0], xr_pose_mod[1]
+        xr_pose_mod[0] = -orig_y
+        xr_pose_mod[1] = orig_x
+        
+        # 2. Orientation Rotation: q_new = q_z * q_old
+        # q_z (90 deg around Z) = [cos(45), 0, 0, sin(45)] = [0.70710678, 0, 0, 0.70710678] (w,x,y,z)
+        qx, qy, qz, qw = xr_pose_mod[3], xr_pose_mod[4], xr_pose_mod[5], xr_pose_mod[6]
+        c = 0.70710678
+        s = 0.70710678
+        
+        new_w = c*qw - s*qz
+        new_x = c*qx - s*qy
+        new_y = c*qy + s*qx
+        new_z = c*qz + s*qw
+        
+        xr_pose_mod[3] = new_x
+        xr_pose_mod[4] = new_y
+        xr_pose_mod[5] = new_z
+        xr_pose_mod[6] = new_w
+        
+        # Use modified pose downstream
+        xr_pose = xr_pose_mod
+        # --------------------------------------------------
+
         # Extract hand position and quaternion (world space)
         hand_xyz_world_raw = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
         hand_xyz_world = hand_xyz_world_raw.copy()
@@ -1062,10 +1091,10 @@ class HardwareMujocoTeleopController(MujocoTeleopController):
 
 
 def main(
-    xml_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/scene_dual_arm.xml"),
-    robot_urdf_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/dual_ur5e.urdf"),
+    xml_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/scene_dual_arm_copy.xml"),
+    robot_urdf_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/dual_ur5e_copy.urdf"),
     scale_factor: float = 1.5,
-    visualize_placo: bool = False,
+    visualize_placo: bool = True,
     hardware_ip: str = "192.168.2.2",
     max_joint_velocity: float = 1.0,
 ):

@@ -81,8 +81,12 @@ class BaseTeleopController(abc.ABC):
 
     def _process_xr_pose(self, xr_pose, src_name):
         """Process the current XR controller pose."""
+        # Get headset pose to calculate hand position relative to headset
+        headset_pose = self.xr_client.get_pose_by_name("headset")
+        headset_xyz = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
+
         # Get position and orientation
-        controller_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
+        hand_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
         controller_quat = [
             xr_pose[6],  # w
             xr_pose[3],  # x
@@ -90,6 +94,10 @@ class BaseTeleopController(abc.ABC):
             xr_pose[5],  # z
         ]
 
+        # Calculate hand position RELATIVE to headset (in headset frame)
+        controller_xyz = hand_xyz - headset_xyz
+
+        # Now transform the relative position to world frame
         controller_xyz = self.R_headset_world @ controller_xyz
 
         R_transform = np.eye(4)
