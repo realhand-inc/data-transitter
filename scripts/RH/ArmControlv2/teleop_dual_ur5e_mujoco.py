@@ -4,12 +4,64 @@ import tkinter as tk
 
 import tyro
 import mujoco
+import numpy as np
 from mujoco import viewer as mj_viewer
+from scipy.spatial.transform import Rotation
 
 from xrobotoolkit_teleop.simulation.mujoco_teleop_controller import (
     MujocoTeleopController,
 )
 from xrobotoolkit_teleop.utils.path_utils import ASSET_PATH
+
+
+class RotatedHandTeleopController(MujocoTeleopController):
+    """Custom controller that applies 90-degree z-axis rotation to hand tracking data."""
+
+    def __init__(self, *args, z_rotation_deg=90.0, **kwargs):
+        """
+        Initialize controller with hand tracking rotation.
+
+        Args:
+            z_rotation_deg: Rotation angle around z-axis in degrees (default: 90.0)
+        """
+        super().__init__(*args, **kwargs)
+        # Create rotation quaternion for z-axis rotation
+        self.z_rotation = Rotation.from_euler('z', z_rotation_deg, degrees=True)
+        self._rotated_poses = {}
+        print(f"Hand tracking rotation: {z_rotation_deg}° around z-axis")
+
+        # Wrap the XR client's get_pose_by_name to return rotated poses
+        self._original_get_pose = self.xr_client.get_pose_by_name
+        self.xr_client.get_pose_by_name = self._get_rotated_pose
+
+    def _get_rotated_pose(self, pose_name):
+        """Wrapper for XR client's get_pose_by_name that applies rotation."""
+        # Get original pose
+        original_pose = self._original_get_pose(pose_name)
+
+        if original_pose is None:
+            return None
+
+        # Check if this is a hand wrist pose (needs rotation)
+        if "hand_wrist" not in pose_name:
+            return original_pose
+
+        # Apply z-axis rotation to the orientation
+        # Pose format: [x, y, z, qx, qy, qz, qw]
+        position = original_pose[:3]
+        orientation_quat = original_pose[3:]  # [qx, qy, qz, qw]
+
+        # Convert to scipy Rotation format and apply z-rotation
+        original_rot = Rotation.from_quat(orientation_quat)
+        rotated_rot = self.z_rotation * original_rot
+
+        # Get rotated quaternion
+        rotated_quat = rotated_rot.as_quat()
+
+        # Create rotated pose
+        rotated_pose = np.concatenate([position, rotated_quat])
+
+        return rotated_pose
 
 
 def run_with_gui(controller, gui):
@@ -41,6 +93,10 @@ def run_with_gui(controller, gui):
                     # Step simulation and update MuJoCo viewer
                     mujoco.mj_step(controller.mj_model, controller.mj_data)
 
+                # Send commands to real robot if robot control is enabled
+                if gui.robot_control_enabled:
+                    gui._send_joints_to_robot()
+
                 # Always sync viewer (so camera controls still work)
                 viewer.sync()
 
@@ -64,6 +120,7 @@ def main(
     show_gui: bool = True,
     right_robot_ip: str = "192.168.2.2",
     enable_rtde: bool = True,
+    hand_z_rotation: float = 90.0,
 ):
     """
     Main function to run the dual UR5e teleoperation in MuJoCo (Right hand only).
@@ -76,6 +133,7 @@ def main(
         show_gui: Whether to show monitoring GUI (default: True)
         right_robot_ip: IP address of right UR5e robot for RTDE (default: 192.168.2.2)
         enable_rtde: Enable RTDE connection to real robot (default: True)
+        hand_z_rotation: Z-axis rotation for hand tracking in degrees (default: 90.0)
     """
     config = {
         "right_hand": {
@@ -85,13 +143,14 @@ def main(
         },
     }
 
-    # Create and initialize the teleoperation controller
-    controller = MujocoTeleopController(
+    # Create and initialize the teleoperation controller with hand rotation
+    controller = RotatedHandTeleopController(
         xml_path=xml_path,
         robot_urdf_path=robot_urdf_path,
         manipulator_config=config,
         scale_factor=scale_factor,
         visualize_placo=visualize_placo,
+        z_rotation_deg=hand_z_rotation,
     )
 
     # additional constraints hardcoded here for now
@@ -101,17 +160,21 @@ def main(
 
     # Setup RTDE connection if enabled
     rtde_receiver = None
+    rtde_controller = None
     if enable_rtde:
         try:
             print(f"Connecting to right robot via RTDE at {right_robot_ip}...")
             import rtde_receive
+            import rtde_control
 
             rtde_receiver = rtde_receive.RTDEReceiveInterface(right_robot_ip)
-            print(f"RTDE connected: {right_robot_ip}")
+            rtde_controller = rtde_control.RTDEControlInterface(right_robot_ip)
+            print(f"RTDE connected (receive + control): {right_robot_ip}")
         except Exception as e:
             print(f"Failed to connect to robot via RTDE: {e}")
             print("Continuing without RTDE connection...")
             rtde_receiver = None
+            rtde_controller = None
 
     # Run with or without GUI
     if show_gui:
@@ -125,7 +188,8 @@ def main(
             gui = TeleopMonitorGUI(
                 controller=controller,
                 start_monitoring=False,
-                rtde_receiver=rtde_receiver
+                rtde_receiver=rtde_receiver,
+                rtde_controller=rtde_controller
             )
             print("GUI created successfully!")
 

@@ -22,7 +22,7 @@ from xrobotoolkit_teleop.common.xr_client import XrClient
 
 
 class TeleopMonitorGUI:
-    def __init__(self, controller=None, start_monitoring=True, rtde_receiver=None):
+    def __init__(self, controller=None, start_monitoring=True, rtde_receiver=None, rtde_controller=None):
         """
         Initialize the monitoring GUI.
 
@@ -30,10 +30,12 @@ class TeleopMonitorGUI:
             controller: Reference to MujocoTeleopController instance for joint data
             start_monitoring: Whether to start monitoring thread automatically (default: True)
             rtde_receiver: RTDE receiver interface for right robot (optional)
+            rtde_controller: RTDE control interface for sending commands to robot (optional)
         """
         print("[GUI] Initializing monitoring GUI...")
         self.controller = controller
         self.rtde_receiver = rtde_receiver
+        self.rtde_controller = rtde_controller
 
         print("[GUI] Getting XrClient from controller...")
         # Reuse the controller's XrClient instead of creating a new one
@@ -60,6 +62,9 @@ class TeleopMonitorGUI:
 
         # Hand tracking control state
         self.hand_tracking_enabled = True
+
+        # Robot control state
+        self.robot_control_enabled = False
 
         # Create GUI
         print("[GUI] Creating Tk window...")
@@ -121,7 +126,7 @@ class TeleopMonitorGUI:
         )
         self.hand_tracking_status.pack(side="left", padx=5)
 
-        # Get Arm Pose button (only show if RTDE is available)
+        # Get Arm Pose button (only show if RTDE receiver is available)
         if self.rtde_receiver is not None:
             self.get_arm_pose_btn = ttk.Button(
                 frame,
@@ -129,7 +134,26 @@ class TeleopMonitorGUI:
                 command=self.get_arm_pose_from_robot,
                 width=15
             )
-            self.get_arm_pose_btn.pack(side="left", padx=20)
+            self.get_arm_pose_btn.pack(side="left", padx=5)
+
+        # Robot control toggle button (only show if RTDE controller is available)
+        if self.rtde_controller is not None:
+            self.robot_control_btn = ttk.Button(
+                frame,
+                text="Enable Robot Control",
+                command=self.toggle_robot_control,
+                width=20
+            )
+            self.robot_control_btn.pack(side="left", padx=5)
+
+            # Robot control status indicator
+            self.robot_control_status = ttk.Label(
+                frame,
+                text="○ DISABLED",
+                foreground="red",
+                font=("Arial", 9, "bold")
+            )
+            self.robot_control_status.pack(side="left", padx=5)
 
         # Clear logs button
         self.clear_logs_btn = ttk.Button(frame, text="Clear Logs", command=self.clear_logs)
@@ -677,6 +701,63 @@ class TeleopMonitorGUI:
             self.log_message(f"Error getting arm pose from robot: {e}", "ERROR")
             import traceback
             traceback.print_exc()
+
+    def toggle_robot_control(self):
+        """Toggle robot control on/off."""
+        self.robot_control_enabled = not self.robot_control_enabled
+
+        if self.robot_control_enabled:
+            # Enable robot control
+            self.robot_control_btn.config(text="Disable Robot Control")
+            self.robot_control_status.config(text="● ENABLED", foreground="green")
+            self.log_message("Robot control ENABLED - Robot will follow simulation", "INFO")
+        else:
+            # Disable robot control
+            self.robot_control_btn.config(text="Enable Robot Control")
+            self.robot_control_status.config(text="○ DISABLED", foreground="red")
+            self.log_message("Robot control DISABLED - Robot will stop receiving commands", "INFO")
+
+    def _send_joints_to_robot(self):
+        """Internal method to send current simulation joint positions to real robot."""
+        if self.rtde_controller is None or self.controller is None:
+            return
+
+        try:
+            # Get current joint positions from simulation (placo state)
+            # The joint order in placo is: [floating_base (7), left_arm (6), right_arm (6)]
+            q = self.controller.placo_robot.state.q.copy()
+            right_joints = q[13:19]  # Right arm joints (indices 13-18)
+
+            # Convert to list for RTDE
+            target_joints = right_joints.tolist()
+
+            # Use servoJ for smooth real-time control
+            # Servo parameters for real-time control
+            max_velocity = 0.5  # rad/s
+            max_acceleration = 1.0  # rad/s^2
+            servo_time = 0.008  # 8ms control cycle
+            lookahead_time = 0.1  # seconds
+            gain = 300  # servo gain
+
+            # Send servoJ command (non-blocking, smooth)
+            # servoJ(q, speed, acceleration, dt, lookahead_time, gain)
+            t_start = self.rtde_controller.initPeriod()
+            self.rtde_controller.servoJ(
+                target_joints,
+                max_velocity,
+                max_acceleration,
+                servo_time,
+                lookahead_time,
+                gain
+            )
+            self.rtde_controller.waitPeriod(t_start)
+
+        except Exception as e:
+            self.log_message(f"Error sending joints to robot: {e}", "ERROR")
+            # Disable robot control on error
+            self.robot_control_enabled = False
+            self.robot_control_btn.config(text="Enable Robot Control")
+            self.robot_control_status.config(text="○ DISABLED", foreground="red")
 
     def update_once(self):
         """
