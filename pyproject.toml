@@ -25,6 +25,7 @@ dependencies = [
     "pyrealsense2",
     "opencv-python",
     "tyro",
+    "PyQt5>=5.15.0",
 ]
 
 [project.optional-dependencies]
