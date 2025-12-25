@@ -12,7 +12,7 @@ Usage:
 """
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext
 import threading
 import time
 import numpy as np
@@ -56,18 +56,14 @@ class TeleopMonitorGUI:
         self.actual_update_rate = 0.0
         self.update_counter = 0
 
-        # Hardware controller reference (set later from main script)
-        self.hardware_controller = None
-
-        # Control mode: "visualization", "hand_tracking", "hardware_control"
-        self.control_mode = "visualization"
-        self.hand_tracking_enabled = False
+        # Hand tracking control state
+        self.hand_tracking_enabled = True
 
         # Create GUI
         print("[GUI] Creating Tk window...")
         self.root = tk.Tk()
         self.root.title("Teleoperation Monitor")
-        self.root.geometry("1800x1900")
+        self.root.geometry("2000x2000")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         print("[GUI] Setting up GUI layout...")
@@ -105,71 +101,32 @@ class TeleopMonitorGUI:
         frame = ttk.LabelFrame(self.root, text="Control Panel", padding=10)
         frame.pack(fill="x", padx=10, pady=5)
 
+        # Hand tracking toggle button
+        self.hand_tracking_btn = ttk.Button(
+            frame,
+            text="Disable Hand Tracking",
+            command=self.toggle_hand_tracking,
+            width=20
+        )
+        self.hand_tracking_btn.pack(side="left", padx=5)
+
+        # Hand tracking status indicator
+        self.hand_tracking_status = ttk.Label(
+            frame,
+            text="● ENABLED",
+            foreground="green",
+            font=("Arial", 9, "bold")
+        )
+        self.hand_tracking_status.pack(side="left", padx=5)
+
         # Clear logs button
         self.clear_logs_btn = ttk.Button(frame, text="Clear Logs", command=self.clear_logs)
-        self.clear_logs_btn.pack(side="left", padx=5)
+        self.clear_logs_btn.pack(side="left", padx=20)
 
         # Status label
         self.status_label = ttk.Label(frame, text="Status: ● MONITORING    Update Rate: 0.0 Hz",
                                      font=("Arial", 10))
         self.status_label.pack(side="left", padx=20)
-
-        # Hardware connection status
-        self.hardware_status_label = ttk.Label(
-            frame,
-            text="Hardware: ○ NOT CONNECTED",
-            foreground="gray",
-            font=("Arial", 10)
-        )
-        self.hardware_status_label.pack(side="left", padx=20)
-
-        # Reset Arm button
-        self.reset_arm_btn = tk.Button(
-            frame,
-            text="🔄 Reset Arm",
-            command=self.reset_arm,
-            bg="blue",
-            fg="white",
-            font=("Arial", 11, "bold"),
-            relief=tk.RAISED,
-            state=tk.DISABLED  # Disabled until hardware connected
-        )
-        self.reset_arm_btn.pack(side="left", padx=5)
-
-        # Hand Tracking toggle button
-        self.hand_tracking_btn = tk.Button(
-            frame,
-            text="🎮 Start Hand Tracking",
-            command=self.toggle_hand_tracking,
-            bg="green",
-            fg="white",
-            font=("Arial", 11, "bold"),
-            relief=tk.RAISED,
-            state=tk.DISABLED  # Disabled until hardware connected
-        )
-        self.hand_tracking_btn.pack(side="left", padx=5)
-
-        # Send to Hardware toggle button
-        self.send_to_hardware_btn = tk.Button(
-            frame,
-            text="📡 Send to Hardware",
-            command=self.toggle_send_to_hardware,
-            bg="gray",
-            fg="white",
-            font=("Arial", 11, "bold"),
-            relief=tk.RAISED,
-            state=tk.DISABLED  # Disabled until hand tracking is enabled
-        )
-        self.send_to_hardware_btn.pack(side="left", padx=5)
-
-        # Control mode indicator
-        self.control_mode_label = ttk.Label(
-            frame,
-            text="Mode: VISUALIZATION",
-            foreground="blue",
-            font=("Arial", 10, "bold")
-        )
-        self.control_mode_label.pack(side="left", padx=10)
 
     def create_hand_tracking_panel(self):
         """Create panel for hand tracking data."""
@@ -636,130 +593,34 @@ class TeleopMonitorGUI:
         self.log_text.delete(1.0, tk.END)
         self.log_message("Logs cleared", "INFO")
 
-    def set_hardware_connected(self, connected: bool):
-        """Update hardware connection status display"""
-        if connected:
-            self.hardware_status_label.config(
-                text="Hardware: ● CONNECTED",
-                foreground="green"
-            )
-        else:
-            self.hardware_status_label.config(
-                text="Hardware: ○ NOT CONNECTED",
-                foreground="gray"
-            )
-
-    def set_hardware_controller(self, hardware_controller):
-        """Set hardware controller reference and enable control buttons"""
-        self.hardware_controller = hardware_controller
-        if hardware_controller and hardware_controller.connected:
-            self.reset_arm_btn.config(state=tk.NORMAL)
-            self.hand_tracking_btn.config(state=tk.NORMAL)
-            self.set_hardware_connected(True)
-
-    def reset_arm(self):
-        """Reset arm to current hardware position"""
-        if not self.hardware_controller:
-            return
-
-        self.log_message("Resetting arm to current hardware position...", "INFO")
-
-        # Disable hardware control if enabled
-        if self.hardware_controller.control_enabled:
-            self.hardware_controller.disable_control()
-
-        # Reset to visualization mode
-        self.control_mode = "visualization"
-        self.hand_tracking_enabled = False
-        self.hand_tracking_btn.config(
-            text="🎮 Start Hand Tracking",
-            bg="green"
-        )
-        self.send_to_hardware_btn.config(
-            text="📡 Send to Hardware",
-            bg="gray",
-            state=tk.DISABLED
-        )
-        self.control_mode_label.config(
-            text="Mode: VISUALIZATION",
-            foreground="blue"
-        )
-
     def toggle_hand_tracking(self):
-        """Toggle hand tracking mode on/off"""
-        if not self.hardware_controller:
-            return
+        """Toggle hand tracking control on/off."""
+        self.hand_tracking_enabled = not self.hand_tracking_enabled
 
         if self.hand_tracking_enabled:
+            # Enable hand tracking
+            self.hand_tracking_btn.config(text="Disable Hand Tracking")
+            self.hand_tracking_status.config(text="● ENABLED", foreground="green")
+            self.log_message("Hand tracking control ENABLED", "INFO")
+
+            # Re-enable hand tracking in controller if available
+            if self.controller is not None:
+                for src_name in self.controller.manipulator_config.keys():
+                    pose_source = self.controller.manipulator_config[src_name].get("pose_source", "")
+                    if "hand_wrist" in pose_source:
+                        self.controller.active[src_name] = True
+        else:
             # Disable hand tracking
-            # First disable hardware control if it's on
-            if self.hardware_controller.control_enabled:
-                self.hardware_controller.disable_control()
-                self.send_to_hardware_btn.config(
-                    text="📡 Send to Hardware",
-                    bg="gray",
-                    state=tk.DISABLED
-                )
+            self.hand_tracking_btn.config(text="Enable Hand Tracking")
+            self.hand_tracking_status.config(text="○ DISABLED", foreground="red")
+            self.log_message("Hand tracking control DISABLED", "INFO")
 
-            self.hand_tracking_enabled = False
-            self.control_mode = "visualization"
-            self.hand_tracking_btn.config(
-                text="🎮 Start Hand Tracking",
-                bg="green"
-            )
-            self.control_mode_label.config(
-                text="Mode: VISUALIZATION",
-                foreground="blue"
-            )
-            self.log_message("Hand tracking DISABLED - Visualization only", "INFO")
-        else:
-            # Enable hand tracking (visualization only, no hardware commands)
-            self.hand_tracking_enabled = True
-            self.control_mode = "hand_tracking"
-            self.hand_tracking_btn.config(
-                text="⏸️ Stop Hand Tracking",
-                bg="orange"
-            )
-            self.send_to_hardware_btn.config(state=tk.NORMAL)  # Enable the send to hardware button
-            self.control_mode_label.config(
-                text="Mode: HAND TRACKING (Viz Only)",
-                foreground="darkorange"
-            )
-            self.log_message("Hand tracking ENABLED - Visualization only (not sending to hardware)", "INFO")
-
-    def toggle_send_to_hardware(self):
-        """Toggle sending commands to hardware on/off"""
-        if not self.hardware_controller or not self.hand_tracking_enabled:
-            return
-
-        if self.hardware_controller.control_enabled:
-            # Disable hardware control
-            self.hardware_controller.disable_control()
-            self.send_to_hardware_btn.config(
-                text="📡 Send to Hardware",
-                bg="gray"
-            )
-            self.control_mode_label.config(
-                text="Mode: HAND TRACKING (Viz Only)",
-                foreground="darkorange"
-            )
-            self.log_message("Hardware control DISABLED - Visualization only", "INFO")
-        else:
-            # Enable hardware control (no confirmation, direct toggle)
-            self.hardware_controller.enable_control()
-            self.send_to_hardware_btn.config(
-                text="⛔ Stop Sending",
-                bg="red"
-            )
-            self.control_mode_label.config(
-                text="Mode: ⚠️  CONTROLLING HARDWARE",
-                foreground="red"
-            )
-            self.log_message("⚠️  Hardware control ENABLED - Robot is following hand movements!", "WARNING")
-
-    def get_hand_tracking_enabled(self):
-        """Return whether hand tracking is enabled"""
-        return self.hand_tracking_enabled
+            # Disable hand tracking in controller if available
+            if self.controller is not None:
+                for src_name in self.controller.manipulator_config.keys():
+                    pose_source = self.controller.manipulator_config[src_name].get("pose_source", "")
+                    if "hand_wrist" in pose_source:
+                        self.controller.active[src_name] = False
 
     def update_once(self):
         """
