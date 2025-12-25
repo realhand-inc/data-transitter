@@ -22,16 +22,18 @@ from xrobotoolkit_teleop.common.xr_client import XrClient
 
 
 class TeleopMonitorGUI:
-    def __init__(self, controller=None, start_monitoring=True):
+    def __init__(self, controller=None, start_monitoring=True, rtde_receiver=None):
         """
         Initialize the monitoring GUI.
 
         Args:
             controller: Reference to MujocoTeleopController instance for joint data
             start_monitoring: Whether to start monitoring thread automatically (default: True)
+            rtde_receiver: RTDE receiver interface for right robot (optional)
         """
         print("[GUI] Initializing monitoring GUI...")
         self.controller = controller
+        self.rtde_receiver = rtde_receiver
 
         print("[GUI] Getting XrClient from controller...")
         # Reuse the controller's XrClient instead of creating a new one
@@ -118,6 +120,16 @@ class TeleopMonitorGUI:
             font=("Arial", 9, "bold")
         )
         self.hand_tracking_status.pack(side="left", padx=5)
+
+        # Get Arm Pose button (only show if RTDE is available)
+        if self.rtde_receiver is not None:
+            self.get_arm_pose_btn = ttk.Button(
+                frame,
+                text="Get Arm Pose",
+                command=self.get_arm_pose_from_robot,
+                width=15
+            )
+            self.get_arm_pose_btn.pack(side="left", padx=20)
 
         # Clear logs button
         self.clear_logs_btn = ttk.Button(frame, text="Clear Logs", command=self.clear_logs)
@@ -323,21 +335,23 @@ class TeleopMonitorGUI:
             try:
                 start_time = time.time()
 
-                # Fetch all data
-                self.fetch_hand_data()
-                self.fetch_headset_data()
-                self.fetch_joint_data()
-                self.fetch_tcp_data()
+                # Only fetch data if hand tracking is enabled
+                if self.hand_tracking_enabled:
+                    # Fetch all data
+                    self.fetch_hand_data()
+                    self.fetch_headset_data()
+                    self.fetch_joint_data()
+                    self.fetch_tcp_data()
 
-                # Calculate actual update rate
-                current_time = time.time()
-                dt = current_time - self.last_update_time
-                if dt > 0:
-                    self.actual_update_rate = 0.9 * self.actual_update_rate + 0.1 * (1.0 / dt)
-                self.last_update_time = current_time
+                    # Calculate actual update rate
+                    current_time = time.time()
+                    dt = current_time - self.last_update_time
+                    if dt > 0:
+                        self.actual_update_rate = 0.9 * self.actual_update_rate + 0.1 * (1.0 / dt)
+                    self.last_update_time = current_time
 
-                # Schedule GUI update on main thread (thread-safe)
-                self.root.after(0, self.update_display)
+                    # Schedule GUI update on main thread (thread-safe)
+                    self.root.after(0, self.update_display)
 
                 # Sleep to maintain ~10Hz rate
                 elapsed = time.time() - start_time
@@ -601,26 +615,68 @@ class TeleopMonitorGUI:
             # Enable hand tracking
             self.hand_tracking_btn.config(text="Disable Hand Tracking")
             self.hand_tracking_status.config(text="● ENABLED", foreground="green")
-            self.log_message("Hand tracking control ENABLED", "INFO")
-
-            # Re-enable hand tracking in controller if available
-            if self.controller is not None:
-                for src_name in self.controller.manipulator_config.keys():
-                    pose_source = self.controller.manipulator_config[src_name].get("pose_source", "")
-                    if "hand_wrist" in pose_source:
-                        self.controller.active[src_name] = True
+            self.log_message("Hand tracking control ENABLED - Robot will respond to hand movements", "INFO")
         else:
             # Disable hand tracking
             self.hand_tracking_btn.config(text="Enable Hand Tracking")
             self.hand_tracking_status.config(text="○ DISABLED", foreground="red")
-            self.log_message("Hand tracking control DISABLED", "INFO")
+            self.log_message("Hand tracking control DISABLED - Robot frozen at current position", "INFO")
 
-            # Disable hand tracking in controller if available
-            if self.controller is not None:
-                for src_name in self.controller.manipulator_config.keys():
-                    pose_source = self.controller.manipulator_config[src_name].get("pose_source", "")
-                    if "hand_wrist" in pose_source:
-                        self.controller.active[src_name] = False
+    def get_arm_pose_from_robot(self):
+        """Get current joint positions from real robot via RTDE and update simulation."""
+        if self.rtde_receiver is None:
+            self.log_message("RTDE not available - cannot get arm pose", "ERROR")
+            return
+
+        if self.controller is None:
+            self.log_message("Controller not available - cannot update pose", "ERROR")
+            return
+
+        try:
+            # Get current joint positions from right arm
+            right_joints = np.array(self.rtde_receiver.getActualQ())
+
+            self.log_message(
+                f"Retrieved joint positions - Right: {np.degrees(right_joints).round(1)}",
+                "INFO"
+            )
+
+            # Update placo robot state
+            # The joint order in placo is: [floating_base (7), left_arm (6), right_arm (6)]
+            q = self.controller.placo_robot.state.q.copy()
+            q[13:19] = right_joints  # Right arm joints (indices 13-18)
+
+            # Update placo state
+            self.controller.placo_robot.state.q = q
+            self.controller.placo_robot.update_kinematics()
+
+            # Update MuJoCo simulation
+            # Get MuJoCo joint indices for the right UR5e arm
+            right_joint_names = [
+                "right_shoulder_pan_joint",
+                "right_shoulder_lift_joint",
+                "right_elbow_joint",
+                "right_wrist_1_joint",
+                "right_wrist_2_joint",
+                "right_wrist_3_joint"
+            ]
+
+            # Update MuJoCo joint positions for right arm
+            for i, joint_name in enumerate(right_joint_names):
+                joint_id = self.controller.mj_model.joint(joint_name).id
+                qpos_addr = self.controller.mj_model.jnt_qposadr[joint_id]
+                self.controller.mj_data.qpos[qpos_addr] = right_joints[i]
+
+            # Forward kinematics to update MuJoCo state
+            import mujoco
+            mujoco.mj_forward(self.controller.mj_model, self.controller.mj_data)
+
+            self.log_message("Successfully updated simulation with right arm pose", "INFO")
+
+        except Exception as e:
+            self.log_message(f"Error getting arm pose from robot: {e}", "ERROR")
+            import traceback
+            traceback.print_exc()
 
     def update_once(self):
         """
@@ -630,21 +686,23 @@ class TeleopMonitorGUI:
         # Update every Nth call to maintain ~10Hz rate
         self.update_counter += 1
         if self.update_counter % 10 == 0:  # Assuming control loop is ~100Hz
-            # Fetch all data
-            self.fetch_hand_data()
-            self.fetch_headset_data()
-            self.fetch_joint_data()
-            self.fetch_tcp_data()
+            # Only fetch data if hand tracking is enabled
+            if self.hand_tracking_enabled:
+                # Fetch all data
+                self.fetch_hand_data()
+                self.fetch_headset_data()
+                self.fetch_joint_data()
+                self.fetch_tcp_data()
 
-            # Calculate update rate
-            current_time = time.time()
-            dt = current_time - self.last_update_time
-            if dt > 0:
-                self.actual_update_rate = 0.9 * self.actual_update_rate + 0.1 * (1.0 / dt)
-            self.last_update_time = current_time
+                # Calculate update rate
+                current_time = time.time()
+                dt = current_time - self.last_update_time
+                if dt > 0:
+                    self.actual_update_rate = 0.9 * self.actual_update_rate + 0.1 * (1.0 / dt)
+                self.last_update_time = current_time
 
-            # Update display
-            self.update_display()
+                # Update display
+                self.update_display()
 
         # Process GUI events
         self.root.update()
