@@ -45,6 +45,7 @@ class BaseTeleopController(abc.ABC):
         self.q_init = q_init
         self.dt = dt
         self.xr_client = XrClient()
+        self.xr_rot_offset_deg = np.array([45.0, 0.0, 0.0])
 
         self.enable_log_data = enable_log_data
         self.log_dir = log_dir
@@ -120,7 +121,7 @@ class BaseTeleopController(abc.ABC):
                 tf.quaternion_conjugate(R_quat),
             )
             roll, pitch, yaw = tf.euler_from_quaternion(headset_quat)
-            headset_quat = tf.quaternion_from_euler(0.0, 0.0, yaw + np.deg2rad(90.0))
+            headset_quat = tf.quaternion_from_euler(0.0, 0.0, yaw - np.deg2rad(45.0))
 
             self.ref_controller_xyz[src_name] = headset_xyz
             self.ref_controller_quat[src_name] = headset_quat
@@ -131,10 +132,18 @@ class BaseTeleopController(abc.ABC):
             delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
             delta_rot = quat_diff_as_angle_axis(self.ref_controller_quat[src_name], controller_quat)
 
-        x_rot = tf.rotation_matrix(np.deg2rad(45.0), [1.0, 0, 2.0])
-        delta_rot = x_rot[:3, :3] @ delta_rot
+        rot_offset = tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[0]), [1.0, 0.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[1]), [0.0, 1.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[2]), [0.0, 0.0, 1.0])
+        delta_rot = rot_offset[:3, :3] @ delta_rot
 
         return delta_xyz, delta_rot
+
+    def set_xr_rot_offset_deg(self, rot_offset_deg: np.ndarray) -> None:
+        """Set rotation offsets (degrees) applied to XR delta rotations."""
+        if len(rot_offset_deg) != 3:
+            raise ValueError("rot_offset_deg must be a 3-element array [x, y, z].")
+        self.xr_rot_offset_deg = np.array(rot_offset_deg, dtype=float)
 
     def _placo_setup(self):
         """Set up the placo inverse kinematics solver."""

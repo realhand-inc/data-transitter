@@ -51,9 +51,6 @@ class TrackingToggleWidget(QWidget):
 
     # Slider scale factor (1 radian = 100 slider units for precision)
     SLIDER_SCALE = 100
-    SHOULDER_PAN_OFFSET_RAD = math.radians(90.0)
-    HW_SHOULDER_PAN_JOINT = "shoulder_pan_joint"
-    SIM_LEFT_SHOULDER_PAN_JOINT = "left_shoulder_pan_joint"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -61,6 +58,9 @@ class TrackingToggleWidget(QWidget):
         self.sliders = {}
         self.value_labels = {}
         self._slider_callback = None
+        self.rotation_sliders = {}
+        self.rotation_value_labels = {}
+        self._rotation_callback = None
 
         # Hardware connection variables
         self.hardware_sliders = {}
@@ -73,8 +73,10 @@ class TrackingToggleWidget(QWidget):
         self.ur_controller = None
         self.current_hw_positions = np.zeros(6)  # Current hardware joint positions
         self.target_hw_positions = np.zeros(6)   # Target positions from sliders
-        self.lerp_alpha = 0.1  # Lerp interpolation factor (10% toward target)
-        self.movement_threshold = 0.01  # Minimum delta in radians (~0.57°) to send command
+        self.smoothed_target_hw_positions = np.zeros(6)
+        self.target_filter_alpha = 0.25  # Low-pass filter on target positions
+        self.max_joint_speed_rad_s = 0.8  # Speed limit per joint (rad/s)
+        self.movement_threshold = 0.0  # Send even small deltas for smooth motion
 
         # Timer for automatic hardware updates
         self.hardware_timer = QTimer()
@@ -135,6 +137,14 @@ class TrackingToggleWidget(QWidget):
         tracking_group = QGroupBox("Hand Tracking")
         tracking_layout = QVBoxLayout()
         tracking_layout.addWidget(self.toggle_button, alignment=Qt.AlignCenter)
+        rot_grid = QGridLayout()
+        rot_grid.setHorizontalSpacing(12)
+        rot_grid.setVerticalSpacing(6)
+        rot_grid.setColumnStretch(1, 1)
+        tracking_layout.addLayout(rot_grid)
+        self._add_rotation_slider(rot_grid, 0, "X", 45)
+        self._add_rotation_slider(rot_grid, 1, "Y", 0)
+        self._add_rotation_slider(rot_grid, 2, "Z", 0)
         tracking_group.setLayout(tracking_layout)
         layout.addWidget(tracking_group)
 
@@ -385,6 +395,11 @@ class TrackingToggleWidget(QWidget):
         """
         self._slider_callback = callback
 
+    def set_rotation_callback(self, callback):
+        """Set callback function to be called when rotation sliders change."""
+        self._rotation_callback = callback
+        self._on_rotation_changed()
+
     def get_manual_joint_values(self):
         """Get current slider positions as joint values.
 
@@ -404,6 +419,44 @@ class TrackingToggleWidget(QWidget):
         if not self._tracking_enabled and self._slider_callback is not None:
             joint_values = self.get_manual_joint_values()
             self._slider_callback(joint_values)
+
+    def _add_rotation_slider(self, grid_layout, row, axis_label, default_value):
+        """Add a rotation slider row (degrees) to a grid layout."""
+        name_label = QLabel(f"Rot {axis_label} (deg)")
+        name_label.setMinimumWidth(200)
+        name_label.setStyleSheet("font-size: 12pt;")
+        grid_layout.addWidget(name_label, row, 0)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setMinimum(-180)
+        slider.setMaximum(180)
+        slider.setValue(default_value)
+        slider.setSingleStep(45)
+        slider.setPageStep(45)
+        slider.setTickInterval(45)
+        slider.setTickPosition(QSlider.TicksBelow)
+        slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        slider.valueChanged.connect(self._on_rotation_changed)
+        self.rotation_sliders[axis_label] = slider
+        grid_layout.addWidget(slider, row, 1)
+
+        value_label = QLabel(f"{default_value}°")
+        value_label.setMinimumWidth(90)
+        value_label.setStyleSheet("font-size: 12pt;")
+        value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.rotation_value_labels[axis_label] = value_label
+        grid_layout.addWidget(value_label, row, 2)
+
+    def _on_rotation_changed(self):
+        """Handle rotation slider value changes."""
+        x_val = self.rotation_sliders["X"].value()
+        y_val = self.rotation_sliders["Y"].value()
+        z_val = self.rotation_sliders["Z"].value()
+        self.rotation_value_labels["X"].setText(f"{x_val}°")
+        self.rotation_value_labels["Y"].setText(f"{y_val}°")
+        self.rotation_value_labels["Z"].setText(f"{z_val}°")
+        if self._rotation_callback is not None:
+            self._rotation_callback(np.array([x_val, y_val, z_val], dtype=float))
 
     def update_joint_positions(self, joint_values):
         """Update slider positions to match joint values from the scene.
@@ -574,6 +627,7 @@ class TrackingToggleWidget(QWidget):
                 # Read current positions
                 self.current_hw_positions = self.ur_controller.get_current_joint_positions()
                 self.target_hw_positions = self.current_hw_positions.copy()
+                self.smoothed_target_hw_positions = self.current_hw_positions.copy()
 
                 # Update sliders to current positions
                 for i, joint_name in enumerate(self.HARDWARE_JOINTS):
@@ -628,24 +682,21 @@ class TrackingToggleWidget(QWidget):
             # Read current positions
             self.current_hw_positions = self.ur_controller.get_current_joint_positions()
 
-            # Calculate delta between target and current
-            delta = self.target_hw_positions - self.current_hw_positions
-
-            # Check if any joint delta exceeds threshold
-            max_delta = np.max(np.abs(delta))
-            if max_delta < self.movement_threshold:
-                # Movement too small, skip sending command
-                return
-
-            # Apply lerp: current + alpha * (target - current)
-            lerped_positions = self.current_hw_positions + self.lerp_alpha * delta
+            # Smooth target and apply speed limit per joint
+            self.smoothed_target_hw_positions = (
+                (1.0 - self.target_filter_alpha) * self.smoothed_target_hw_positions
+                + self.target_filter_alpha * self.target_hw_positions
+            )
+            delta = self.smoothed_target_hw_positions - self.current_hw_positions
+            max_step = self.max_joint_speed_rad_s * (self.control_timer.interval() / 1000.0)
+            step = np.clip(delta, -max_step, max_step)
+            lerped_positions = self.current_hw_positions + step
 
             # Log command
             print(f"\n[HW CMD] Current: {np.degrees(self.current_hw_positions).round(1)}°")
-            print(f"[HW CMD] Target:  {np.degrees(self.target_hw_positions).round(1)}°")
+            print(f"[HW CMD] Target:  {np.degrees(self.smoothed_target_hw_positions).round(1)}°")
             print(f"[HW CMD] Sending: {np.degrees(lerped_positions).round(1)}°")
             print(f"[HW CMD] Delta:   {np.degrees(lerped_positions - self.current_hw_positions).round(2)}°")
-            print(f"[HW CMD] Max Δ:   {np.degrees(max_delta):.2f}° (threshold: {np.degrees(self.movement_threshold):.2f}°)")
 
             # Send command to robot
             self.ur_controller.servo_joints(lerped_positions)
@@ -680,10 +731,7 @@ class TrackingToggleWidget(QWidget):
         sim_joint_values = {}
         for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
             sim_joint_name = f"left_{hw_joint_name}"
-            angle_rad = joint_positions[i]
-            if sim_joint_name == self.SIM_LEFT_SHOULDER_PAN_JOINT:
-                angle_rad += self.SHOULDER_PAN_OFFSET_RAD
-            sim_joint_values[sim_joint_name] = angle_rad
+            sim_joint_values[sim_joint_name] = joint_positions[i]
 
         if self._slider_callback is not None:
             self._slider_callback(sim_joint_values)
@@ -711,8 +759,6 @@ class TrackingToggleWidget(QWidget):
             if sim_joint_name not in joint_values:
                 continue
             angle_rad = joint_values[sim_joint_name]
-            if sim_joint_name == self.SIM_LEFT_SHOULDER_PAN_JOINT:
-                angle_rad -= self.SHOULDER_PAN_OFFSET_RAD
             angle_deg = math.degrees(angle_rad)
             slider = self.hardware_sliders[hw_joint_name]
             slider.blockSignals(True)

@@ -25,6 +25,7 @@ class DualUR5eToggleApp(QMainWindow):
 
         # Connect slider callback for manual control
         self.widget.set_slider_callback(self.on_manual_control)
+        self.widget.set_rotation_callback(self.on_rotation_change)
 
         # Set up QTimer to drive simulation loop at 100 Hz (10ms interval)
         self.timer = QTimer()
@@ -70,6 +71,10 @@ class DualUR5eToggleApp(QMainWindow):
             self.timer.stop()
             self.close()
 
+    def on_rotation_change(self, rot_offset_deg):
+        """Update XR rotation offsets used for delta rotations."""
+        self.controller.set_xr_rot_offset_deg(rot_offset_deg)
+
     def closeEvent(self, event):
         """Handle window close event."""
         self.timer.stop()
@@ -81,7 +86,7 @@ class DualUR5eToggleApp(QMainWindow):
 def main(
     xml_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/scene_dual_arm.xml"),
     robot_urdf_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/dual_ur5e.urdf"),
-    scale_factor: float = 1.5,
+    scale_factor: float = 1,
     visualize_placo: bool = False,
 ):
     """
