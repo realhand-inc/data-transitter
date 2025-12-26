@@ -32,7 +32,8 @@ class DualUR5eToggleApp(QMainWindow):
         self.timer.start(10)  # 10ms = 100 Hz
 
         # Set window properties
-        self.setWindowTitle("Hand Tracking Control")
+        self.setWindowTitle("Dual UR5e Teleoperation")
+        self.setMinimumSize(1500, 1000)
 
         # Setup viewer camera (do this once)
         self.viewer.cam.azimuth = 0
