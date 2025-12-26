@@ -73,6 +73,7 @@ class DualUR5eToggleApp(QMainWindow):
         """Handle window close event."""
         self.timer.stop()
         self.controller._stop_event.set()
+        self.widget.cleanup()  # Cleanup hardware connection
         event.accept()
 
 
