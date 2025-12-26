@@ -519,27 +519,9 @@ class TrackingToggleWidget(QWidget):
 
                     self.hardware_value_labels[joint_name].setText(f"{angle_deg:.1f}°")
 
-                # Update 3D simulation if requested
-                if update_3d:
-                    # Map hardware joint names to simulation joint names (add "left_" prefix)
-                    sim_joint_values = {}
-                    for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
-                        sim_joint_name = f"left_{hw_joint_name}"
-                        sim_joint_values[sim_joint_name] = joint_positions[i]
-
-                    # Update 3D scene via callback
-                    if self._slider_callback is not None:
-                        self._slider_callback(sim_joint_values)
-
-                    # Update simulation sliders to match
-                    for sim_joint_name, angle_rad in sim_joint_values.items():
-                        if sim_joint_name in self.sliders:
-                            angle_deg = math.degrees(angle_rad)
-                            slider = self.sliders[sim_joint_name]
-                            slider.blockSignals(True)
-                            slider.setValue(int(angle_rad * self.SLIDER_SCALE))
-                            slider.blockSignals(False)
-                            self.value_labels[sim_joint_name].setText(f"{angle_deg:.1f}°")
+                # Update 3D simulation if requested or tracking is OFF
+                if update_3d or not self._tracking_enabled:
+                    self._sync_sim_from_hardware_positions(joint_positions)
 
             except Exception as e:
                 print(f"Hardware read failed: {e}")
@@ -565,6 +547,8 @@ class TrackingToggleWidget(QWidget):
                 slider = self.hardware_sliders[joint_name]
                 angle_rad = slider.value() / self.SLIDER_SCALE
                 self.target_hw_positions[i] = angle_rad
+        if not self._tracking_enabled:
+            self._sync_sim_from_hardware_sliders()
 
     def _on_control_arm_toggled(self, checked):
         """Handle Control Arm button toggle."""
@@ -683,3 +667,29 @@ class TrackingToggleWidget(QWidget):
                 print("Hardware connection closed.")
             except Exception as e:
                 print(f"Cleanup error: {e}")
+
+    def _sync_sim_from_hardware_positions(self, joint_positions):
+        """Update 3D scene and sim sliders from hardware joint positions."""
+        sim_joint_values = {}
+        for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
+            sim_joint_name = f"left_{hw_joint_name}"
+            sim_joint_values[sim_joint_name] = joint_positions[i]
+
+        if self._slider_callback is not None:
+            self._slider_callback(sim_joint_values)
+
+        for sim_joint_name, angle_rad in sim_joint_values.items():
+            if sim_joint_name in self.sliders:
+                angle_deg = math.degrees(angle_rad)
+                slider = self.sliders[sim_joint_name]
+                slider.blockSignals(True)
+                slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+                slider.blockSignals(False)
+                self.value_labels[sim_joint_name].setText(f"{angle_deg:.1f}°")
+
+    def _sync_sim_from_hardware_sliders(self):
+        """Update 3D scene from current hardware slider values."""
+        joint_positions = np.zeros(len(self.HARDWARE_JOINTS))
+        for i, joint_name in enumerate(self.HARDWARE_JOINTS):
+            joint_positions[i] = self.hardware_sliders[joint_name].value() / self.SLIDER_SCALE
+        self._sync_sim_from_hardware_positions(joint_positions)
