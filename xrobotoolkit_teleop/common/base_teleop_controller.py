@@ -177,10 +177,10 @@ class BaseTeleopController(abc.ABC):
 
         self.placo_robot.update_kinematics()
 
-    def _update_ik(self):
+    def _update_ik_targets(self):
         """
-        This is the core IK logic block. It reads from XR, updates Placo tasks,
-        and solves the kinematics.
+        Read XR controller poses and update IK target transforms.
+        This updates task.T_world_frame but does not solve IK.
         """
         self._update_robot_state()
         self.placo_robot.update_kinematics()
@@ -218,7 +218,7 @@ class BaseTeleopController(abc.ABC):
                 # else: xr_pose already retrieved above
 
                 delta_xyz, delta_rot = self._process_xr_pose(xr_pose, src_name)
-                
+
                 if self.effector_control_mode[src_name] == "position":
                     # Position-only control: only apply position delta
                     target_xyz = self.ref_ee_xyz[src_name] + delta_xyz
@@ -243,10 +243,20 @@ class BaseTeleopController(abc.ABC):
         # Process motion tracker data
         self._update_motion_tracker_tasks()
 
+    def _solve_ik(self):
+        """Solve IK to compute joint positions based on current task targets."""
         try:
             self.solver.solve(True)
         except RuntimeError as e:
             print(f"IK solver failed: {e}")
+
+    def _update_ik(self):
+        """
+        Update IK targets and solve IK (full IK update).
+        This is a wrapper for backward compatibility.
+        """
+        self._update_ik_targets()
+        self._solve_ik()
 
     def _update_motion_tracker_tasks(self):
         """Process motion tracker data and update corresponding Placo tasks."""

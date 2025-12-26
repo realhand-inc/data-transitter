@@ -183,15 +183,20 @@ class MujocoTeleopController(BaseTeleopController):
 
         Args:
             viewer: MuJoCo viewer instance for rendering
-            skip_ik: If True, skip IK update (robot holds position)
+            skip_ik: If True, skip IK solving (robot holds position)
+                    but still update target markers from VR
         """
         self._update_robot_state()
 
+        # Always update IK targets from VR (so mocap markers follow controllers)
+        self._update_ik_targets()
+
+        # Only solve IK when tracking is ON
         if not skip_ik:
-            self._update_ik()
+            self._solve_ik()
 
         self._update_gripper_target()
-        self._update_mocap_target()
+        self._update_mocap_target()  # Now has updated targets even when skip_ik=True
         self._send_command()
 
         # Step simulation and update viewer
