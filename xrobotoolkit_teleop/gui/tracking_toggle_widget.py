@@ -52,6 +52,7 @@ class TrackingToggleWidget(QWidget):
 
     # Slider scale factor (1 radian = 100 slider units for precision)
     SLIDER_SCALE = 100
+    DEFAULT_SHOULDER_PAN_OFFSET_DEG = -90.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -62,6 +63,7 @@ class TrackingToggleWidget(QWidget):
         self.rotation_sliders = {}
         self.rotation_value_labels = {}
         self._rotation_callback = None
+        self.shoulder_pan_offset_deg = self.DEFAULT_SHOULDER_PAN_OFFSET_DEG
 
         # Hardware connection variables
         self.hardware_sliders = {}
@@ -90,6 +92,14 @@ class TrackingToggleWidget(QWidget):
         self.control_timer.setInterval(100)  # Send commands at 10 Hz
 
         self._init_ui()
+
+    def _wrap_angle_rad(self, angle_rad: float) -> float:
+        """Wrap angle to [-pi, pi] for slider display."""
+        return (angle_rad + math.pi) % (2 * math.pi) - math.pi
+
+    def _apply_shoulder_pan_offset(self, angle_rad: float, direction: int) -> float:
+        """Apply shoulder pan offset (+1 for sim->hw, -1 for hw->sim)."""
+        return angle_rad + direction * math.radians(self.shoulder_pan_offset_deg)
 
     def _init_ui(self):
         """Initialize the user interface."""
@@ -146,6 +156,7 @@ class TrackingToggleWidget(QWidget):
         self._add_rotation_slider(rot_grid, 0, "X", 45)
         self._add_rotation_slider(rot_grid, 1, "Y", 0)
         self._add_rotation_slider(rot_grid, 2, "Z", 0)
+        self._add_shoulder_pan_offset_control(tracking_layout)
         self.xr_status_label = QLabel("XR ZMQ: idle")
         self.xr_status_label.setStyleSheet("color: #475569; font-size: 11pt;")
         tracking_layout.addWidget(self.xr_status_label, alignment=Qt.AlignLeft)
@@ -480,6 +491,38 @@ class TrackingToggleWidget(QWidget):
         if self._rotation_callback is not None:
             self._rotation_callback(np.array([x_val, y_val, z_val], dtype=float))
 
+    def _add_shoulder_pan_offset_control(self, parent_layout):
+        """Add UI control for shoulder pan offset (degrees)."""
+        row = QHBoxLayout()
+        label = QLabel("Shoulder Pan Offset (deg)")
+        label.setStyleSheet("font-size: 12pt;")
+        row.addWidget(label)
+
+        self.shoulder_pan_offset_slider = QSlider(Qt.Horizontal)
+        self.shoulder_pan_offset_slider.setMinimum(-180)
+        self.shoulder_pan_offset_slider.setMaximum(180)
+        self.shoulder_pan_offset_slider.setValue(int(self.shoulder_pan_offset_deg))
+        self.shoulder_pan_offset_slider.setSingleStep(5)
+        self.shoulder_pan_offset_slider.setPageStep(15)
+        self.shoulder_pan_offset_slider.setTickInterval(30)
+        self.shoulder_pan_offset_slider.setTickPosition(QSlider.TicksBelow)
+        self.shoulder_pan_offset_slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.shoulder_pan_offset_slider.valueChanged.connect(self._on_shoulder_pan_offset_changed)
+        row.addWidget(self.shoulder_pan_offset_slider, stretch=1)
+
+        self.shoulder_pan_offset_value = QLabel(f"{int(self.shoulder_pan_offset_deg)}°")
+        self.shoulder_pan_offset_value.setMinimumWidth(90)
+        self.shoulder_pan_offset_value.setStyleSheet("font-size: 12pt;")
+        self.shoulder_pan_offset_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        row.addWidget(self.shoulder_pan_offset_value)
+
+        parent_layout.addLayout(row)
+
+    def _on_shoulder_pan_offset_changed(self, value):
+        self.shoulder_pan_offset_deg = float(value)
+        if hasattr(self, "shoulder_pan_offset_value"):
+            self.shoulder_pan_offset_value.setText(f"{int(value)}°")
+
     def update_joint_positions(self, joint_values):
         """Update slider positions to match joint values from the scene.
 
@@ -494,7 +537,7 @@ class TrackingToggleWidget(QWidget):
                 # Update slider (block signals to avoid triggering events)
                 slider = self.sliders[joint_name]
                 slider.blockSignals(True)
-                slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+                slider.setValue(int(self._wrap_angle_rad(angle_rad) * self.SLIDER_SCALE))
                 slider.blockSignals(False)
 
                 # Update value label in degrees
@@ -596,7 +639,7 @@ class TrackingToggleWidget(QWidget):
 
                     slider = self.hardware_sliders[joint_name]
                     slider.blockSignals(True)
-                    slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+                    slider.setValue(int(self._wrap_angle_rad(angle_rad) * self.SLIDER_SCALE))
                     slider.blockSignals(False)
 
                     self.hardware_value_labels[joint_name].setText(f"{angle_deg:.1f}°")
@@ -657,7 +700,7 @@ class TrackingToggleWidget(QWidget):
                     angle_deg = math.degrees(angle_rad)
                     slider = self.hardware_sliders[joint_name]
                     slider.blockSignals(True)
-                    slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+                    slider.setValue(int(self._wrap_angle_rad(angle_rad) * self.SLIDER_SCALE))
                     slider.blockSignals(False)
                     self.hardware_value_labels[joint_name].setText(f"{angle_deg:.1f}°")
 
@@ -710,6 +753,8 @@ class TrackingToggleWidget(QWidget):
                 + self.target_filter_alpha * self.target_hw_positions
             )
             delta = self.smoothed_target_hw_positions - self.current_hw_positions
+            # Wrap shoulder pan delta to avoid 180/-180 jumps
+            delta[0] = self._wrap_angle_rad(delta[0])
             max_step = self.max_joint_speed_rad_s * (self.control_timer.interval() / 1000.0)
             step = np.clip(delta, -max_step, max_step)
             lerped_positions = self.current_hw_positions + step
@@ -753,7 +798,10 @@ class TrackingToggleWidget(QWidget):
         sim_joint_values = {}
         for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
             sim_joint_name = f"left_{hw_joint_name}"
-            sim_joint_values[sim_joint_name] = joint_positions[i]
+            angle_rad = joint_positions[i]
+            if hw_joint_name == "shoulder_pan_joint":
+                angle_rad = self._apply_shoulder_pan_offset(angle_rad, direction=-1)
+            sim_joint_values[sim_joint_name] = angle_rad
 
         if self._slider_callback is not None:
             self._slider_callback(sim_joint_values)
@@ -763,7 +811,7 @@ class TrackingToggleWidget(QWidget):
                 angle_deg = math.degrees(angle_rad)
                 slider = self.sliders[sim_joint_name]
                 slider.blockSignals(True)
-                slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+                slider.setValue(int(self._wrap_angle_rad(angle_rad) * self.SLIDER_SCALE))
                 slider.blockSignals(False)
                 self.value_labels[sim_joint_name].setText(f"{angle_deg:.1f}°")
 
@@ -781,10 +829,12 @@ class TrackingToggleWidget(QWidget):
             if sim_joint_name not in joint_values:
                 continue
             angle_rad = joint_values[sim_joint_name]
+            if hw_joint_name == "shoulder_pan_joint":
+                angle_rad = self._apply_shoulder_pan_offset(angle_rad, direction=1)
             angle_deg = math.degrees(angle_rad)
             slider = self.hardware_sliders[hw_joint_name]
             slider.blockSignals(True)
-            slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+            slider.setValue(int(self._wrap_angle_rad(angle_rad) * self.SLIDER_SCALE))
             slider.blockSignals(False)
             self.hardware_value_labels[hw_joint_name].setText(f"{angle_deg:.1f}°")
             if self.control_arm_enabled:

@@ -56,7 +56,7 @@ class BaseTeleopController(abc.ABC):
                 self.xr_client = ZmqXrClient(zmq_endpoint)
             else:
                 self.xr_client = XrClient()
-        self.xr_rot_offset_deg = np.array([0.0, 0.0, 0.0])
+        self.xr_rot_offset_deg = np.array([45.0, 0.0, 0.0])
 
         self.enable_log_data = enable_log_data
         self.log_dir = log_dir
@@ -93,12 +93,8 @@ class BaseTeleopController(abc.ABC):
 
     def _process_xr_pose(self, xr_pose, src_name):
         """Process the current XR controller pose."""
-        # Get headset pose to calculate hand position relative to headset
-        headset_pose = self.xr_client.get_pose_by_name("headset")
-        headset_xyz = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
-
         # Get position and orientation
-        hand_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
+        controller_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
         controller_quat = [
             xr_pose[6],  # w
             xr_pose[3],  # x
@@ -106,7 +102,6 @@ class BaseTeleopController(abc.ABC):
             xr_pose[5],  # z
         ]
 
-        controller_xyz = hand_xyz - headset_xyz
         controller_xyz = self.R_headset_world @ controller_xyz
 
         R_transform = np.eye(4)
@@ -118,8 +113,26 @@ class BaseTeleopController(abc.ABC):
         )
 
         if self.ref_controller_xyz[src_name] is None:
-            self.ref_controller_xyz[src_name] = controller_xyz
-            self.ref_controller_quat[src_name] = controller_quat
+            headset_pose = self.xr_client.get_pose_by_name("headset")
+            headset_xyz = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
+            headset_quat = [
+                headset_pose[6],  # w
+                headset_pose[3],  # x
+                headset_pose[4],  # y
+                headset_pose[5],  # z
+            ]
+            headset_xyz = self.R_headset_world @ headset_xyz
+
+            headset_xyz = headset_xyz - np.array([0.0, 0.0, 0.0254 * 33.0])
+            headset_quat = tf.quaternion_multiply(
+                tf.quaternion_multiply(R_quat, headset_quat),
+                tf.quaternion_conjugate(R_quat),
+            )
+            roll, pitch, yaw = tf.euler_from_quaternion(headset_quat)
+            headset_quat = tf.quaternion_from_euler(0.0, 0.0, yaw - np.deg2rad(45.0))
+
+            self.ref_controller_xyz[src_name] = headset_xyz
+            self.ref_controller_quat[src_name] = headset_quat
 
             delta_xyz = np.zeros(3)
             delta_rot = np.array([0.0, 0.0, 0.0])
@@ -127,11 +140,10 @@ class BaseTeleopController(abc.ABC):
             delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
             delta_rot = quat_diff_as_angle_axis(self.ref_controller_quat[src_name], controller_quat)
 
-        if np.any(self.xr_rot_offset_deg):
-            rot_offset = tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[0]), [1.0, 0.0, 0.0])
-            rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[1]), [0.0, 1.0, 0.0])
-            rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[2]), [0.0, 0.0, 1.0])
-            delta_rot = rot_offset[:3, :3] @ delta_rot
+        rot_offset = tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[0]), [1.0, 0.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[1]), [0.0, 1.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[2]), [0.0, 0.0, 1.0])
+        delta_rot = rot_offset[:3, :3] @ delta_rot
 
         return delta_xyz, delta_rot
 
