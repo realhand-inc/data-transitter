@@ -65,6 +65,8 @@ class DualUR5eToggleApp(QMainWindow):
 
             # Update GUI sliders with joint data
             self.widget.update_joint_positions(joint_positions)
+            # Update XR ZMQ status badge
+            self.widget.update_xr_status(self.controller.xr_client)
 
         except KeyboardInterrupt:
             print("\nTeleoperation stopped.")
@@ -88,10 +90,13 @@ def main(
     robot_urdf_path: str = os.path.join(ASSET_PATH, "universal_robots_ur5e/dual_ur5e.urdf"),
     scale_factor: float = 1,
     visualize_placo: bool = False,
+    xr_zmq_endpoint: str | None = "tcp://127.0.0.1:5558",
 ):
     """
     Main function to run the dual UR5e teleoperation with PyQt5 GUI toggle button.
     """
+    if not xr_zmq_endpoint:
+        xr_zmq_endpoint = "tcp://127.0.0.1:5558"
     config = {
         "right_hand": {
             "link_name": "right_tool0",  # control the IK target
@@ -117,6 +122,7 @@ def main(
         manipulator_config=config,
         scale_factor=scale_factor,
         visualize_placo=visualize_placo,
+        xr_zmq_endpoint=xr_zmq_endpoint,
     )
 
     # Additional constraints hardcoded here for now

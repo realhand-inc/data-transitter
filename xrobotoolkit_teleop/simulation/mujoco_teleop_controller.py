@@ -28,6 +28,8 @@ class MujocoTeleopController(BaseTeleopController):
         scale_factor=1.0,
         dt=0.01,
         mj_qpos_init=None,
+        xr_client=None,
+        xr_zmq_endpoint: str | None = None,
     ):
         self.visualize_placo = visualize_placo
         self.xml_path = xml_path
@@ -46,6 +48,8 @@ class MujocoTeleopController(BaseTeleopController):
             scale_factor,
             q_init=None,
             dt=dt,
+            xr_client=xr_client,
+            xr_zmq_endpoint=xr_zmq_endpoint,
         )
 
         if visualize_placo:

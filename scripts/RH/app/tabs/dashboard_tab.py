@@ -89,6 +89,14 @@ class DashboardTabMixin:
 
         self.render_hand_data_endpoints()
 
+        # XR Data Broadcasting status
+        xr_port = getattr(self, "xr_data_port", 5558)
+        ttk.Label(frame, text=f"XR Data Broadcast (tcp://*:{xr_port})", font=("TkDefaultFont", 9, "bold")).grid(
+            column=0, row=15, columnspan=2, padx=8, pady=(12, 4), sticky="w"
+        )
+        self.xr_data_status_badge = ttk.Label(frame, text="XR ZMQ: idle", style="BadgeIdle.TLabel")
+        self.xr_data_status_badge.grid(column=0, row=16, columnspan=2, padx=8, pady=(0, 8), sticky="w")
+
     def build_visualizer_frame(self, parent: ttk.Frame):
         """Build the dashboard visualizer (Gauges + Graph)."""
         frame = ttk.LabelFrame(parent, text="Head Rotation Visualizer", style="Section.TLabelframe")

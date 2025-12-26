@@ -114,6 +114,13 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         self.hand_data_endpoints = []
         self.hand_data_ip_var = tk.StringVar(value="localhost:5557")
 
+        # ZMQ for full XR data broadcasting (teleop bridge)
+        self.xr_data_socket = None
+        self.xr_data_port = 5558
+        self.xr_data_send_count = 0
+        self.xr_data_last_send_ts = 0.0
+        self.xr_data_bind_error = None
+
         # Screenshot viewer state
         self.screenshot_window = None
         self.screenshot_label = None
@@ -179,6 +186,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
         # Initialize XrClient and start data collection
         self.init_xr_client()
+        self._init_xr_data_pub()
 
         # Auto-connect to hand data endpoint on startup
         endpoint = self.hand_data_ip_var.get().strip()
@@ -581,6 +589,20 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             messagebox.showerror("Hand Data", f"Failed to connect: {e}")
             self.log(f"Failed to connect to {endpoint}: {e}")
 
+    def _init_xr_data_pub(self):
+        """Bind a PUB socket for broadcasting full XR data snapshots."""
+        try:
+            self.xr_data_socket = self.zmq_context.socket(zmq.PUB)
+            self.xr_data_socket.bind(f"tcp://*:{self.xr_data_port}")
+            self.log(f"XR data PUB bound on tcp://*:{self.xr_data_port}")
+            print(f"[ADB GUI] XR data PUB bound on tcp://*:{self.xr_data_port}")
+            self.xr_data_bind_error = None
+        except Exception as e:
+            self.xr_data_socket = None
+            self.xr_data_bind_error = str(e)
+            self.log(f"Failed to bind XR data PUB socket on {self.xr_data_port}: {e}")
+            print(f"[ADB GUI] Failed to bind XR data PUB socket on {self.xr_data_port}: {e}")
+
     def disconnect_hand_data_endpoint(self, endpoint):
         """Disconnect from a specific hand data endpoint"""
         try:
@@ -730,6 +752,43 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         except Exception as e:
             pass  # Silently ignore sending errors to avoid flooding logs
 
+    def send_xr_data(self, full_data: dict):
+        """Broadcast full XR snapshot data to teleop subscribers."""
+        if not self.xr_data_socket:
+            return
+        try:
+            headset = full_data.get("headset", {})
+            left_ctrl = full_data.get("leftController", {})
+            right_ctrl = full_data.get("rightController", {})
+            left_hand = full_data.get("leftHand", {})
+            right_hand = full_data.get("rightHand", {})
+            raw_payload = {
+                "headset_pose": headset.get("pose_raw"),
+                "left_controller_pose": left_ctrl.get("pose_raw"),
+                "right_controller_pose": right_ctrl.get("pose_raw"),
+                "left_hand_joints": left_hand.get("joints_raw") if left_hand.get("isActive") else None,
+                "right_hand_joints": right_hand.get("joints_raw") if right_hand.get("isActive") else None,
+                "timestamp_ns": headset.get("timeStampNs"),
+            }
+            json_data = json.dumps(raw_payload)
+            self.xr_data_socket.send_string(json_data, zmq.NOBLOCK)
+            self.xr_data_send_count += 1
+            self.xr_data_last_send_ts = time.time()
+            if self.xr_data_send_count == 1 or self.xr_data_send_count % 50 == 0:
+                self.log(
+                    "XR ZMQ send #{count} headset_status={hs} left_active={la} right_active={ra}".format(
+                        count=self.xr_data_send_count,
+                        hs=headset.get("status"),
+                        la=left_hand.get("isActive"),
+                        ra=right_hand.get("isActive"),
+                    )
+                )
+                print(json.dumps(raw_payload))
+        except zmq.Again:
+            pass
+        except Exception:
+            pass
+
     def _mediapipe_to_landmark_list(self, mediapipe_array):
         """Convert MediaPipe numpy array to list of {x, y, z} dicts
 
@@ -819,6 +878,11 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         def fmt_pose(p):
             if p is None: return "0.0,0.0,0.0,0.0,0.0,0.0,0.0"
             return ",".join([f"{x:.4f}" for x in p])
+        
+        def pose_to_list(p):
+            if p is None:
+                return None
+            return np.asarray(p, dtype=float).tolist()
 
         ts = self.xr_client.get_timestamp_ns()
         
@@ -826,6 +890,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         headset_pose = self.xr_client.get_pose_by_name("headset")
         data["headset"] = {
             "pose": fmt_pose(headset_pose),
+            "pose_raw": pose_to_list(headset_pose),
             "status": 3 if headset_pose is not None else 0,
             "timeStampNs": ts
         }
@@ -860,6 +925,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                     "menuButton": menu,
                     "axisClick": axis_click,
                     "pose": fmt_pose(pose),
+                    "pose_raw": pose_to_list(pose),
                     "timeStampNs": ts
                 }
             except Exception:
@@ -867,7 +933,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
                 return {
                     "axisX": 0.0, "axisY": 0.0, "grip": 0.0, "trigger": 0.0,
                     "primaryButton": False, "secondaryButton": False, "menuButton": False, "axisClick": False,
-                    "pose": fmt_pose(None), "timeStampNs": ts
+                    "pose": fmt_pose(None), "pose_raw": None, "timeStampNs": ts
                 }
 
         data["leftController"] = get_controller_info("left")
@@ -1006,6 +1072,8 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
 
                 # Broadcast MediaPipe hand data via ZMQ
                 self.send_hand_data()
+                # Broadcast full XR data for teleop bridge
+                self.send_xr_data(full_data)
 
                 # Sleep to maintain ~10Hz update rate
                 time.sleep(0.1)
@@ -1047,6 +1115,28 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             send_text = "Send: idle"
         self.send_status_badge.configure(text=send_text, style=send_style)
 
+    def update_xr_data_badge(self):
+        """Refresh XR data broadcast status badge."""
+        if not hasattr(self, "xr_data_status_badge"):
+            return
+        if not self.xr_data_socket:
+            error = self.xr_data_bind_error or "bind failed"
+            self.xr_data_status_badge.configure(text=f"XR ZMQ: unavailable ({error})", style="BadgeWarn.TLabel")
+            return
+        now = time.time()
+        last_send = self.xr_data_last_send_ts
+        if last_send and now - last_send < 1.0:
+            style = "BadgeGood.TLabel"
+            text = f"XR ZMQ: active ({self.xr_data_send_count})"
+        elif last_send:
+            age_ms = (now - last_send) * 1000
+            style = "BadgeWarn.TLabel"
+            text = f"XR ZMQ: stale ({age_ms:.0f} ms)"
+        else:
+            style = "BadgeIdle.TLabel"
+            text = "XR ZMQ: idle"
+        self.xr_data_status_badge.configure(text=text, style=style)
+
     def update_data_display(self):
         """Update the data display (gauges, graph, or raw data) periodically"""
         try:
@@ -1084,6 +1174,7 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
             # Update status label (common for both)
             self.data_status_label.config(text=f"Status: {status} | {freq:.1f} Hz")
             self.update_io_indicators(times if update_visualizer else []) # Pass empty if not visualizing history
+            self.update_xr_data_badge()
 
             if update_visualizer:
                 # Update history graph
@@ -1210,6 +1301,12 @@ class AdbControlApp(DashboardTabMixin, RawDataTabMixin, MediaPipeTabMixin):
         for sock in self.hand_data_sockets:
             try:
                 sock.close()
+            except Exception:
+                pass
+
+        if self.xr_data_socket:
+            try:
+                self.xr_data_socket.close()
             except Exception:
                 pass
 

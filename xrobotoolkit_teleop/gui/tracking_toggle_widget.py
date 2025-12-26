@@ -15,6 +15,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 import math
+import time
 import numpy as np
 
 # Try to import UR interfaces for hardware connection
@@ -145,6 +146,9 @@ class TrackingToggleWidget(QWidget):
         self._add_rotation_slider(rot_grid, 0, "X", 45)
         self._add_rotation_slider(rot_grid, 1, "Y", 0)
         self._add_rotation_slider(rot_grid, 2, "Z", 0)
+        self.xr_status_label = QLabel("XR ZMQ: idle")
+        self.xr_status_label.setStyleSheet("color: #475569; font-size: 11pt;")
+        tracking_layout.addWidget(self.xr_status_label, alignment=Qt.AlignLeft)
         tracking_group.setLayout(tracking_layout)
         layout.addWidget(tracking_group)
 
@@ -382,6 +386,24 @@ class TrackingToggleWidget(QWidget):
                 }
                 """
             )
+
+    def update_xr_status(self, xr_client):
+        """Update XR ZMQ receive status if available."""
+        if not hasattr(self, "xr_status_label"):
+            return
+        if not hasattr(xr_client, "last_receive_ts"):
+            self.xr_status_label.setText("XR ZMQ: n/a")
+            return
+        now = time.time()
+        last_ts = getattr(xr_client, "last_receive_ts", 0.0)
+        count = getattr(xr_client, "recv_count", 0)
+        if last_ts and (now - last_ts) < 1.0:
+            self.xr_status_label.setText(f"XR ZMQ: active ({count})")
+        elif last_ts:
+            age_ms = (now - last_ts) * 1000
+            self.xr_status_label.setText(f"XR ZMQ: stale ({age_ms:.0f} ms)")
+        else:
+            self.xr_status_label.setText("XR ZMQ: idle")
 
     def is_tracking_enabled(self):
         """Return True if hand tracking is enabled."""
