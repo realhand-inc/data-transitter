@@ -51,6 +51,9 @@ class TrackingToggleWidget(QWidget):
 
     # Slider scale factor (1 radian = 100 slider units for precision)
     SLIDER_SCALE = 100
+    SHOULDER_PAN_OFFSET_RAD = math.radians(90.0)
+    HW_SHOULDER_PAN_JOINT = "shoulder_pan_joint"
+    SIM_LEFT_SHOULDER_PAN_JOINT = "left_shoulder_pan_joint"
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -336,6 +339,8 @@ class TrackingToggleWidget(QWidget):
         # Enable/disable sliders based on tracking state
         for slider in self.sliders.values():
             slider.setEnabled(not checked)  # Enabled when tracking OFF
+        for slider in self.hardware_sliders.values():
+            slider.setEnabled(self.control_arm_enabled or not checked)
 
         if checked:
             self.toggle_button.setText("Hand Tracking: ON")
@@ -419,6 +424,8 @@ class TrackingToggleWidget(QWidget):
 
                 # Update value label in degrees
                 self.value_labels[joint_name].setText(f"{angle_deg:.1f}°")
+        if self._tracking_enabled:
+            self._sync_hardware_from_sim_joint_values(joint_values)
 
 
     def _on_connect_clicked(self):
@@ -601,7 +608,7 @@ class TrackingToggleWidget(QWidget):
 
             # Disable hardware sliders
             for slider in self.hardware_sliders.values():
-                slider.setEnabled(False)
+                slider.setEnabled(not self._tracking_enabled)
 
             # Close controller
             if self.ur_controller:
@@ -673,7 +680,10 @@ class TrackingToggleWidget(QWidget):
         sim_joint_values = {}
         for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
             sim_joint_name = f"left_{hw_joint_name}"
-            sim_joint_values[sim_joint_name] = joint_positions[i]
+            angle_rad = joint_positions[i]
+            if sim_joint_name == self.SIM_LEFT_SHOULDER_PAN_JOINT:
+                angle_rad += self.SHOULDER_PAN_OFFSET_RAD
+            sim_joint_values[sim_joint_name] = angle_rad
 
         if self._slider_callback is not None:
             self._slider_callback(sim_joint_values)
@@ -693,3 +703,21 @@ class TrackingToggleWidget(QWidget):
         for i, joint_name in enumerate(self.HARDWARE_JOINTS):
             joint_positions[i] = self.hardware_sliders[joint_name].value() / self.SLIDER_SCALE
         self._sync_sim_from_hardware_positions(joint_positions)
+
+    def _sync_hardware_from_sim_joint_values(self, joint_values):
+        """Update hardware sliders from sim joint values (tracking ON)."""
+        for i, hw_joint_name in enumerate(self.HARDWARE_JOINTS):
+            sim_joint_name = f"left_{hw_joint_name}"
+            if sim_joint_name not in joint_values:
+                continue
+            angle_rad = joint_values[sim_joint_name]
+            if sim_joint_name == self.SIM_LEFT_SHOULDER_PAN_JOINT:
+                angle_rad -= self.SHOULDER_PAN_OFFSET_RAD
+            angle_deg = math.degrees(angle_rad)
+            slider = self.hardware_sliders[hw_joint_name]
+            slider.blockSignals(True)
+            slider.setValue(int(angle_rad * self.SLIDER_SCALE))
+            slider.blockSignals(False)
+            self.hardware_value_labels[hw_joint_name].setText(f"{angle_deg:.1f}°")
+            if self.control_arm_enabled:
+                self.target_hw_positions[i] = angle_rad
