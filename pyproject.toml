@@ -26,13 +26,6 @@ dependencies = [
     "opencv-python",
     "tyro",
     "PyQt5>=5.15.0",
-    "pynput",
-    "customtkinter",
-    "matplotlib",
-    "pyzmq",
-    "PyYAML",
-    "fastapi",
-    "uvicorn",
 ]
 
 [project.optional-dependencies]

@@ -77,48 +77,35 @@ class DualArmURController:
         R_headset_world: np.ndarray = R_HEADSET_TO_WORLD,
         scale_factor: float = DEFAULT_SCALE_FACTOR,
         visualize_placo: bool = True,  # Add placo visualization option
-        enable_gripper: bool = True,
-        enable_left_arm: bool = True,
-        enable_right_arm: bool = True,
     ):
         self.xr_client = xr_client
         self.robot_urdf_path = robot_urdf_path
         self.R_headset_world = R_headset_world
         self.scale_factor = scale_factor
         self.visualize_placo = visualize_placo
-        self.enable_gripper = enable_gripper
-        self.enable_left_arm = enable_left_arm
-        self.enable_right_arm = enable_right_arm
 
-        self.left_controller = None
-        if self.enable_left_arm:
-            self.left_controller = URController(
-                robot_ip=left_robot_ip,
-                initial_joint_positions=np.deg2rad(left_initial_joint_deg),
-                max_velocity=max_velocity,
-                max_acceleration=max_acceleration,
-                servo_time=servo_time,
-                lookahead_time=lookahead_time,
-                servo_gain=servo_gain,
-                gripper_force=gripper_force,
-                gripper_speed=gripper_speed,
-                enable_gripper=enable_gripper,
-            )
-
-        self.right_controller = None
-        if self.enable_right_arm:
-            self.right_controller = URController(
-                robot_ip=right_robot_ip,
-                initial_joint_positions=np.deg2rad(right_initial_joint_deg),
-                max_velocity=max_velocity,
-                max_acceleration=max_acceleration,
-                servo_time=servo_time,
-                lookahead_time=lookahead_time,
-                servo_gain=servo_gain,
-                gripper_force=gripper_force,
-                gripper_speed=gripper_speed,
-                enable_gripper=enable_gripper,
-            )
+        self.left_controller = URController(
+            robot_ip=left_robot_ip,
+            initial_joint_positions=np.deg2rad(left_initial_joint_deg),
+            max_velocity=max_velocity,
+            max_acceleration=max_acceleration,
+            servo_time=servo_time,
+            lookahead_time=lookahead_time,
+            servo_gain=servo_gain,
+            gripper_force=gripper_force,
+            gripper_speed=gripper_speed,
+        )
+        self.right_controller = URController(
+            robot_ip=right_robot_ip,
+            initial_joint_positions=np.deg2rad(right_initial_joint_deg),
+            max_velocity=max_velocity,
+            max_acceleration=max_acceleration,
+            servo_time=servo_time,
+            lookahead_time=lookahead_time,
+            servo_gain=servo_gain,
+            gripper_force=gripper_force,
+            gripper_speed=gripper_speed,
+        )
 
         # Placo Setup
         self.placo_robot = placo.RobotWrapper(self.robot_urdf_path)
@@ -135,14 +122,7 @@ class DualArmURController:
         self.init_ee_quat = {}
         self.init_controller_xyz = {}
         self.init_controller_quat = {}
-        
-        # Only initialize tasks for enabled arms
         for name, config in self.manipulator_config.items():
-            if name == "left_arm" and not self.enable_left_arm:
-                continue
-            if name == "right_arm" and not self.enable_right_arm:
-                continue
-                
             initial_pose = np.eye(4)
             self.effector_task[name] = self.solver.add_frame_task(config["link_name"], initial_pose)
             self.effector_task[name].configure(f"{name}_frame", "soft", 1.0)
@@ -153,33 +133,18 @@ class DualArmURController:
             self.init_controller_xyz[name] = np.array([0, 0, 0])
             self.init_controller_quat[name] = np.array([1, 0, 0, 0])
 
-        self.target_left_q = np.deg2rad(left_initial_joint_deg)
-        self.target_right_q = np.deg2rad(right_initial_joint_deg)
-        
-        # Initialize joint positions and grippers
-        if self.enable_left_arm:
-            left_q_init = self.left_controller.get_current_joint_positions()
-            self.placo_robot.state.q[7:13] = left_q_init
-            self.target_left_q = left_q_init.copy()
-            if self.enable_gripper:
-                self.left_gripper_pos = self.left_controller.gripper.get_open_position()
-            else:
-                self.left_gripper_pos = 0
-        else:
-            self.placo_robot.state.q[7:13] = self.target_left_q
-            self.left_gripper_pos = 0
-            
-        if self.enable_right_arm:
-            right_q_init = self.right_controller.get_current_joint_positions()
-            self.placo_robot.state.q[13:19] = right_q_init
-            self.target_right_q = right_q_init.copy()
-            if self.enable_gripper:
-                self.right_gripper_pos = self.right_controller.gripper.get_open_position()
-            else:
-                self.right_gripper_pos = 0
-        else:
-            self.placo_robot.state.q[13:19] = self.target_right_q
-            self.right_gripper_pos = 0
+        left_q_init = self.left_controller.get_current_joint_positions()
+        right_q_init = self.right_controller.get_current_joint_positions()
+
+        self.left_gripper_pos = self.left_controller.gripper.get_open_position()
+        self.right_gripper_pos = self.right_controller.gripper.get_open_position()
+
+        # 7 (base) + 6 (left) + 6 (right)
+        self.placo_robot.state.q[7:13] = left_q_init
+        self.placo_robot.state.q[13:19] = right_q_init
+
+        self.target_left_q = left_q_init.copy()
+        self.target_right_q = right_q_init.copy()
 
         if self.visualize_placo:
             self.placo_robot.update_kinematics()
@@ -193,12 +158,11 @@ class DualArmURController:
 
             self.placo_vis.display(self.placo_robot.state.q)
             for name, config in self.manipulator_config.items():
-                if name in self.effector_task:
-                    robot_frame_viz(self.placo_robot, config["link_name"])
-                    frame_viz(
-                        f"vis_target_{name}",
-                        self.effector_task[name].T_world_frame,
-                    )
+                robot_frame_viz(self.placo_robot, config["link_name"])
+                frame_viz(
+                    f"vis_target_{name}",
+                    self.effector_task[name].T_world_frame,
+                )
 
     def _process_xr_pose(self, xr_pose, arm_name: str):
         """Process the current XR controller pose, similar to MujocoTeleopController."""
@@ -238,44 +202,34 @@ class DualArmURController:
         Calculates the target joint positions for both arms using Placo IK
         based on Pico controller poses and grip commands.
         """
-        if self.enable_left_arm:
-            current_q_left_actual = self.left_controller.get_current_joint_positions()
-            self.placo_robot.state.q[7:13] = current_q_left_actual
-        
-        if self.enable_right_arm:
-            current_q_right_actual = self.right_controller.get_current_joint_positions()
-            self.placo_robot.state.q[13:19] = current_q_right_actual
+        current_q_left_actual = self.left_controller.get_current_joint_positions()
+        current_q_right_actual = self.right_controller.get_current_joint_positions()
+
+        self.placo_robot.state.q[7:13] = current_q_left_actual
+        self.placo_robot.state.q[13:19] = current_q_right_actual
 
         self.placo_robot.update_kinematics()
 
         for arm_name, config in self.manipulator_config.items():
-            # Skip disabled arms
-            if arm_name == "left_arm" and not self.enable_left_arm:
-                continue
-            if arm_name == "right_arm" and not self.enable_right_arm:
-                continue
-                
             xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
             active = xr_grip_val > (1.0 - CONTROLLER_DEADZONE)
-            
-            if self.enable_gripper:
-                trigger_val = self.xr_client.get_key_value_by_name(config["gripper_trigger"])
-                if arm_name == "left_arm" and self.enable_left_arm:
-                    self.left_gripper_pos = int(
-                        calc_parallel_gripper_position(
-                            self.left_controller.gripper.get_open_position(),
-                            self.left_controller.gripper.get_closed_position(),
-                            trigger_val,
-                        )
+            trigger_val = self.xr_client.get_key_value_by_name(config["gripper_trigger"])
+            if arm_name == "left_arm":
+                self.left_gripper_pos = int(
+                    calc_parallel_gripper_position(
+                        self.left_controller.gripper.get_open_position(),
+                        self.left_controller.gripper.get_closed_position(),
+                        trigger_val,
                     )
-                elif arm_name == "right_arm" and self.enable_right_arm:
-                    self.right_gripper_pos = int(
-                        calc_parallel_gripper_position(
-                            self.right_controller.gripper.get_open_position(),
-                            self.right_controller.gripper.get_closed_position(),
-                            trigger_val,
-                        )
+                )
+            elif arm_name == "right_arm":
+                self.right_gripper_pos = int(
+                    calc_parallel_gripper_position(
+                        self.right_controller.gripper.get_open_position(),
+                        self.right_controller.gripper.get_closed_position(),
+                        trigger_val,
                     )
+                )
 
             if active:
                 if self.init_ee_xyz[arm_name] is None:
@@ -300,8 +254,7 @@ class DualArmURController:
 
                 target_transform = tf.quaternion_matrix(target_quat)
                 target_transform[:3, 3] = target_xyz
-                if arm_name in self.effector_task:
-                    self.effector_task[arm_name].T_world_frame = target_transform
+                self.effector_task[arm_name].T_world_frame = target_transform
 
             else:  # Not active
                 if self.init_ee_xyz[arm_name] is not None:
@@ -311,26 +264,22 @@ class DualArmURController:
                     self.init_controller_xyz[arm_name] = None
                     self.init_controller_quat[arm_name] = None
                     T_world_ee_current = self.placo_robot.get_T_world_frame(config["link_name"])
-                    if arm_name in self.effector_task:
-                        self.effector_task[arm_name].T_world_frame = T_world_ee_current
+                    self.effector_task[arm_name].T_world_frame = T_world_ee_current
 
         try:
             self.solver.solve(True)
 
-            if self.enable_left_arm:
-                self.target_left_q = self.placo_robot.state.q[7:13].copy()
-            if self.enable_right_arm:
-                self.target_right_q = self.placo_robot.state.q[13:19].copy()
+            self.target_left_q = self.placo_robot.state.q[7:13].copy()
+            self.target_right_q = self.placo_robot.state.q[13:19].copy()
 
             if self.visualize_placo and hasattr(self, "placo_vis"):
                 self.placo_vis.display(self.placo_robot.state.q)
                 for name, config in self.manipulator_config.items():
-                    if name in self.effector_task:
-                        robot_frame_viz(self.placo_robot, config["link_name"])
-                        frame_viz(
-                            f"vis_target_{name}",
-                            self.effector_task[name].T_world_frame,
-                        )
+                    robot_frame_viz(self.placo_robot, config["link_name"])
+                    frame_viz(
+                        f"vis_target_{name}",
+                        self.effector_task[name].T_world_frame,
+                    )
 
         except RuntimeError as e:
             print(f"IK solver failed: {e}. Returning last known good joint positions.")
@@ -338,43 +287,33 @@ class DualArmURController:
             print(f"An unexpected error occurred in IK: {e}. Returning last known good joint positions.")
 
     def reset(self):
-        if self.enable_left_arm:
-            self.left_controller.reset()
-        if self.enable_right_arm:
-            self.right_controller.reset()
+        self.left_controller.reset()
+        self.right_controller.reset()
 
     def close(self):
-        if self.left_controller:
-            self.left_controller.close()
-        if self.right_controller:
-            self.right_controller.close()
+        self.left_controller.close()
+        self.right_controller.close()
 
     def run_left_controller_thread(self, stop_event):
-        if not self.enable_left_arm:
-            return
         print("Starting left arm control thread...")
         while not stop_event.is_set():
             self.left_controller.servo_joints(self.target_left_q)
-            if self.enable_gripper:
-                self.left_controller.gripper.move(
-                    self.left_gripper_pos,
-                    self.left_controller.gripper_speed,
-                    self.left_controller.gripper_force,
-                )
+            self.left_controller.gripper.move(
+                self.left_gripper_pos,
+                self.left_controller.gripper_speed,
+                self.left_controller.gripper_force,
+            )
         self.left_controller.close()
 
     def run_right_controller_thread(self, stop_event):
-        if not self.enable_right_arm:
-            return
         print("Starting right arm control thread...")
         while not stop_event.is_set():
             self.right_controller.servo_joints(self.target_right_q)
-            if self.enable_gripper:
-                self.right_controller.gripper.move(
-                    self.right_gripper_pos,
-                    self.right_controller.gripper_speed,
-                    self.right_controller.gripper_force,
-                )
+            self.right_controller.gripper.move(
+                self.right_gripper_pos,
+                self.right_controller.gripper_speed,
+                self.right_controller.gripper_force,
+            )
         self.right_controller.close()
 
     def run_ik_thread(self, stop_event):
