@@ -24,7 +24,7 @@ class MujocoTeleopController(BaseTeleopController):
         manipulator_config: Dict[str, Dict[str, Any]],
         floating_base=False,
         R_headset_world=R_HEADSET_TO_WORLD,
-        visualize_placo=False,
+        visualize_placo=True,
         scale_factor=1.0,
         dt=0.01,
         mj_qpos_init=None,
@@ -205,6 +205,7 @@ class MujocoTeleopController(BaseTeleopController):
 
     def run(self):
         with mj_viewer.launch_passive(self.mj_model, self.mj_data) as viewer:
+            print("Starting Mujoco teleoperation controller run loop...")
             # Set up viewer camera
             viewer.cam.azimuth = 0
             viewer.cam.elevation = -50

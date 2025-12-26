@@ -1,0 +1,25 @@
+# dependencies
+node_modules/
+venv/
+.env
+
+# build artifacts
+dist/
+build/
+__pycache__/
+*.pyc
+
+# large / generated files
+*.log
+*.bin
+*.onnx
+*.pt
+
+# secrets
+.env*
+*.key
+*.pem
+
+scripts/simulation
+
+scripts/RH/app

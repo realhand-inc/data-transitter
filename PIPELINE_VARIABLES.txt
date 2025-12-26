@@ -1,0 +1,285 @@
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║              COMPLETE DATAFLOW WITH VARIABLE NAMES & LOCATIONS                 ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: VR Headset → XrClient                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: xrobotoolkit_teleop/common/xr_client.py                          │
+│ Method: xr_client.get_pose_by_name("left_hand_wrist")                      │
+│                                                                             │
+│ DATA: xr_pose = [x, y, z, qx, qy, qz, qw]                                  │
+│                                                                             │
+│ Logged to: self.log_data['hand_tracking']['left_hand_pose']                │
+│            Line 256 in _log_hand_tracking_data()                            │
+│                                                                             │
+│ Display: [HAND TRACKING INPUT] section in log panel                        │
+│          ✅ USER CONFIRMS THIS UPDATES                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: XR Pose → Pose Processing → IK Solver                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: xrobotoolkit_teleop/common/base_teleop_controller.py             │
+│ Method: _update_ik() → solver.solve()                                      │
+│         Line 555 in hand_tracking_mujoco_viz.py                             │
+│                                                                             │
+│ Processing Flow:                                                            │
+│   xr_pose → _process_xr_pose() → delta_xyz, delta_rot                      │
+│          → apply_delta_pose() → target_pose                                 │
+│          → effector_task.T_world_frame = target_pose                        │
+│          → solver.solve(True)                                               │
+│                                                                             │
+│ RESULT: placo_robot.state.q = [full robot state with IK solution]          │
+│                                                                             │
+│ Evidence: MuJoCo 3D visualization moves correctly                           │
+│           ✅ USER CONFIRMS 3D VIZ WORKS                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: Extract q_target from IK Result                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:560                                  │
+│ Method: _extract_q_target_from_ik()                                        │
+│                                                                             │
+│ Code:                                                                       │
+│   if self.arm_joint_indices and len(self.arm_joint_indices) > 0:           │
+│       self.q_target = np.array([                                            │
+│           self.placo_robot.state.q[i]                                       │
+│           for i in self.arm_joint_indices                                   │
+│       ])                                                                    │
+│                                                                             │
+│ DATA: self.q_target = [6x1 array] for single arm                           │
+│       Example: [ 1.2345, -0.5678,  0.9876, -1.2345,  0.6543, -0.3210]      │
+│                                                                             │
+│ Logged to: self.log_data['ik_result']['q_target']                          │
+│            Line 323                                                         │
+│                                                                             │
+│ Debug Output: Line 330                                                      │
+│   print(f"[DEBUG] q_target extracted: {np.degrees(self.q_target).round(2)}")│
+│   Every 60 frames (1 second)                                                │
+│                                                                             │
+│ Display: [IK SOLVER OUTPUT] section in log panel                           │
+│          ❓ NEED TO CHECK IF THIS APPEARS                                  │
+│                                                                             │
+│ 🔍 CHECK CONSOLE FOR:                                                      │
+│    [DEBUG] q_target extracted: [ 70.73 -32.54  56.58 ...]                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: Mode Selection → q_desired                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:564                                  │
+│ Method: _select_command_based_on_mode()                                    │
+│                                                                             │
+│ Code:                                                                       │
+│   q_desired = None                                                          │
+│                                                                             │
+│   if self.control_mode == "hand_tracking":                                  │
+│       if self.q_target is not None:                                         │
+│           q_desired = self.q_target.copy()  # ← CRITICAL LINE              │
+│       else:                                                                 │
+│           # ⚠️ q_desired stays None!                                       │
+│                                                                             │
+│ DATA: q_desired = [6x1 array] (copy of q_target)                           │
+│                                                                             │
+│ ⚠️ FAILURE MODES:                                                          │
+│    1. self.control_mode != "hand_tracking"                                  │
+│       → q_desired = None                                                    │
+│                                                                             │
+│    2. self.q_target is None                                                 │
+│       → q_desired = None                                                    │
+│                                                                             │
+│ 🔍 ADD DEBUG:                                                              │
+│    print(f"mode={self.control_mode}, q_target={'SET' if self.q_target...")  │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 5: Apply Velocity Limiting → q_command                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:509-520                              │
+│ Method: _select_command_based_on_mode() (continued)                        │
+│                                                                             │
+│ Code:                                                                       │
+│   if q_desired is not None:                                                 │
+│       if self.q_command_prev is None:                                       │
+│           # First command - no previous reference                           │
+│           self.q_command = q_desired.copy()                                 │
+│           self.q_command_prev = self.q_command.copy()                       │
+│       else:                                                                 │
+│           # Apply velocity limiting                                         │
+│           self.q_command, was_limited = self._apply_velocity_limit(         │
+│               q_desired, self.q_command_prev                                │
+│           )                                                                 │
+│           self.q_command_prev = self.q_command.copy()                       │
+│   # ⚠️ If q_desired is None, q_command is NEVER SET!                      │
+│                                                                             │
+│ DATA: self.q_command = [6x1 array] (velocity-limited or not)               │
+│       self.q_command_prev = [6x1 array] (saved for next iteration)         │
+│                                                                             │
+│ ⚠️ FAILURE MODE:                                                           │
+│    If q_desired is None → q_command stays as previous value or None        │
+│                                                                             │
+│ 🔍 ADD DEBUG:                                                              │
+│    print(f"q_desired={'SET' if q_desired is not None else 'NONE'}")         │
+│    print(f"q_command={'SET' if self.q_command is not None else 'NONE'}")    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 6: Log Control Data                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:523-527                              │
+│ Method: _select_command_based_on_mode() (end)                              │
+│                                                                             │
+│ Code:                                                                       │
+│   self.log_data['control']['mode'] = self.control_mode                     │
+│   self.log_data['control']['q_command'] = (                                │
+│       self.q_command.copy() if self.q_command is not None else None        │
+│   )                                                                         │
+│   self.log_data['control']['q_actual'] = (                                 │
+│       self.q_actual.copy() if self.q_actual is not None else None          │
+│   )                                                                         │
+│   if self.q_command is not None and self.q_actual is not None:             │
+│       self.log_data['control']['error'] = self.q_command - self.q_actual   │
+│                                                                             │
+│ DATA: log_data = {                                                          │
+│           'control': {                                                      │
+│               'mode': 'hand_tracking',                                      │
+│               'q_command': [6x1 array or None],  ← KEY VALUE               │
+│               'q_actual': [6x1 array or None],                              │
+│               'error': [6x1 array or None]                                  │
+│           }                                                                 │
+│       }                                                                     │
+│                                                                             │
+│ ⚠️ If self.q_command is None → log_data['control']['q_command'] = None    │
+│                                                                             │
+│ 🔍 ADD DEBUG:                                                              │
+│    print(f"log_data q_command = {self.log_data['control']['q_command']}")   │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 7: Send q_command to Hardware (if connected)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:567                                  │
+│ Method: _send_command_to_hardware()                                        │
+│                                                                             │
+│ Code:                                                                       │
+│   if not self.is_connected or self.q_command is None:                      │
+│       return  # ← EXIT EARLY                                               │
+│                                                                             │
+│   if self.control_mode in ["hand_tracking", "manual"]:                     │
+│       self.rtde_c.servoJ(self.q_command.tolist(), ...)                     │
+│                                                                             │
+│ DATA: self.q_command sent to robot via RTDE                                │
+│                                                                             │
+│ Note: If not connected, this step is skipped (expected)                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 8: Send q_command to MuJoCo                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:568                                  │
+│ Method: _send_command_to_mujoco()                                          │
+│                                                                             │
+│ Code:                                                                       │
+│   if self.arm_joint_indices and self.q_command is not None:                │
+│       for i, idx in enumerate(self.arm_joint_indices):                     │
+│           self.placo_robot.state.q[idx] = self.q_command[i]                │
+│                                                                             │
+│   super()._send_command()  # Calls MujocoTeleopController._send_command()  │
+│                                                                             │
+│ ⚠️ IMPORTANT: If q_command is None, placo_robot.state.q is NOT updated    │
+│    BUT: IK already set placo_robot.state.q in STEP 2                       │
+│    SO: MuJoCo still shows correct visualization!                           │
+│                                                                             │
+│ This explains why 3D viz works even if q_command is None!                  │
+│                                                                             │
+│ Evidence: ✅ USER CONFIRMS 3D VIZ WORKS                                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    ↓
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 9: Update Log Display                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Location: hand_tracking_mujoco_viz.py:572                                  │
+│ Method: _update_log_display()                                              │
+│                                                                             │
+│ Code:                                                                       │
+│   log_output.append("\n[CONTROL OUTPUT]")                                  │
+│                                                                             │
+│   if self.log_data['control']['q_command'] is not None:  ← KEY CHECK      │
+│       q_cmd = self.log_data['control']['q_command']                        │
+│       log_output.append(f"  Command Joints (deg): ...")                    │
+│   # ⚠️ If q_command is None, NOTHING is added to log_output!             │
+│                                                                             │
+│   self.log_text.insert("1.0", "\n".join(log_output))                       │
+│                                                                             │
+│ Display: GUI Text Widget (log panel)                                       │
+│          ❌ USER SAYS THIS DOESN'T UPDATE                                  │
+│                                                                             │
+│ 🔍 ROOT CAUSE:                                                             │
+│    self.log_data['control']['q_command'] is None                           │
+│    ↓                                                                        │
+│    self.q_command is None (in STEP 6)                                      │
+│    ↓                                                                        │
+│    q_desired was None (in STEP 5)                                          │
+│    ↓                                                                        │
+│    Either: control_mode != "hand_tracking"                                  │
+│    Or: self.q_target is None (extraction failed in STEP 3)                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                          DIAGNOSIS SUMMARY                                     ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+USER REPORTS:
+  ✅ [HAND TRACKING INPUT] updates → XR data flowing (STEP 1)
+  ✅ MuJoCo 3D viz works → IK solver working (STEP 2)
+  ❌ [CONTROL OUTPUT] not updating → q_command is None (STEP 6-9)
+
+CONCLUSION:
+  Data flows up to STEP 2 (IK solver) ✅
+  But breaks somewhere between STEP 3-6:
+    - STEP 3: q_target extraction
+    - STEP 4: Mode selection
+    - STEP 5: Velocity limiting
+    - STEP 6: Logging assignment
+
+MOST LIKELY CAUSES (in order):
+  1. q_target is None (extraction failed) - CHECK FIRST
+  2. control_mode != "hand_tracking" - CHECK SECOND
+  3. Velocity limiting bug - CHECK THIRD
+
+
+╔═══════════════════════════════════════════════════════════════════════════════╗
+║                        QUICK DIAGNOSTIC SCRIPT                                 ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+
+Add these debug prints to the code:
+
+# After line 560 (_extract_q_target_from_ik)
+print(f"[1] q_target = {'SET' if self.q_target is not None else 'NONE'}")
+
+# At start of _select_command_based_on_mode() (line 493)
+print(f"[2] mode = {self.control_mode}")
+print(f"[3] q_target = {'SET' if self.q_target is not None else 'NONE'}")
+
+# After q_desired assignment (line 499)
+print(f"[4] q_desired = {'SET' if q_desired is not None else 'NONE'}")
+
+# After velocity limiting (line 520)
+print(f"[5] q_command = {'SET' if self.q_command is not None else 'NONE'}")
+
+# Before logging (line 523)
+print(f"[6] About to log: q_command = {self.q_command}")
+
+
+EXPECTED OUTPUT (if working):
+  [1] q_target = SET
+  [2] mode = hand_tracking
+  [3] q_target = SET
+  [4] q_desired = SET
+  [5] q_command = SET
+  [6] About to log: q_command = [ 1.23 -0.56  0.98 -1.23  0.65 -0.32]
+
+If you see NONE anywhere, that's where the pipeline breaks!
