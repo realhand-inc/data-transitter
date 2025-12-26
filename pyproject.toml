@@ -25,13 +25,7 @@ dependencies = [
     "pyrealsense2",
     "opencv-python",
     "tyro",
-    "pynput",
-    "customtkinter",
-    "matplotlib",
-    "pyzmq",
-    "PyYAML",
-    "fastapi",
-    "uvicorn",
+    "PyQt5>=5.15.0",
 ]
 
 [project.optional-dependencies]

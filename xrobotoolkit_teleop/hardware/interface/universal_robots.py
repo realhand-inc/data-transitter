@@ -4,8 +4,8 @@ import rtde_receive
 
 from xrobotoolkit_teleop.hardware.interface.robotiq_gripper import RobotiqGripper
 
-LEFT_ROBOT_IP = "192.168.2.2"
-RIGHT_ROBOT_IP = "192.168.2.3"
+LEFT_ROBOT_IP = "192.168.50.55"
+RIGHT_ROBOT_IP = "192.168.50.195"
 
 SERVO_TIME = 0.017
 LOOKAHEAD_TIME = 0.1
@@ -33,7 +33,7 @@ class URController:
         servo_gain: float = SERVO_GAIN,
         gripper_force: float = GRIPPER_FORCE,
         gripper_speed: float = GRIPPER_SPEED,
-        enable_gripper: bool = True,
+        with_gripper: bool = True,
     ):
         self.robot_ip = robot_ip
         self.initial_joint_positions = initial_joint_positions
@@ -44,18 +44,19 @@ class URController:
         self.servo_gain = servo_gain
         self.gripper_force = gripper_force
         self.gripper_speed = gripper_speed
-        self.enable_gripper = enable_gripper
+        self.with_gripper = with_gripper
 
         self.rtde_c = rtde_control.RTDEControlInterface(robot_ip)
         self.rtde_r = rtde_receive.RTDEReceiveInterface(robot_ip)
         print(f"Connected to UR robot at {robot_ip}")
 
-        if self.enable_gripper:
+        self.gripper = None
+        if with_gripper:
             self.gripper = RobotiqGripper()
             self.gripper.connect(robot_ip, 63352)
             print("Gripper connected.")
         else:
-            self.gripper = None
+            print("Gripper connection skipped (with_gripper=False)")
 
     def reset(self):
         print(f"Moving to initial joint positions: {self.initial_joint_positions}")
@@ -104,8 +105,56 @@ class URController:
         self.rtde_c.stopScript()
         if self.gripper:
             self.gripper.disconnect()
-        print("UR controller closed and gripper disconnected.")
+            print("UR controller closed and gripper disconnected.")
+        else:
+            print("UR controller closed.")
 
     def __del__(self):
         """Ensures resources are released when the object is deleted."""
+        self.close()
+
+
+class URReader:
+    """Read-only RTDE interface for monitoring UR robot joint positions.
+
+    This class only uses RTDEReceiveInterface, allowing it to:
+    - Work without a gripper attached
+    - Coexist with other RTDE control connections
+    - Monitor robot state without controlling it
+    """
+
+    def __init__(self, robot_ip: str):
+        self.robot_ip = robot_ip
+        self.rtde_r = None
+        print(f"URReader created for {robot_ip} (not connected yet)")
+
+    def connect(self):
+        """Connect to RTDE receive interface."""
+        try:
+            self.rtde_r = rtde_receive.RTDEReceiveInterface(self.robot_ip)
+            print(f"URReader connected to {self.robot_ip}")
+            return True
+        except Exception as e:
+            print(f"URReader connection failed: {e}")
+            raise
+
+    def get_current_joint_positions(self) -> np.ndarray:
+        """Read current joint positions from robot.
+
+        Returns:
+            np.ndarray: 6 joint angles in radians
+        """
+        if self.rtde_r is None:
+            raise RuntimeError("Not connected. Call connect() first.")
+        return np.array(self.rtde_r.getActualQ())
+
+    def close(self):
+        """Close connection."""
+        if self.rtde_r is not None:
+            self.rtde_r.disconnect()
+            self.rtde_r = None
+            print(f"URReader disconnected from {self.robot_ip}")
+
+    def __del__(self):
+        """Cleanup on deletion."""
         self.close()

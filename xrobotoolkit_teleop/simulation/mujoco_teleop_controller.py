@@ -24,7 +24,7 @@ class MujocoTeleopController(BaseTeleopController):
         manipulator_config: Dict[str, Dict[str, Any]],
         floating_base=False,
         R_headset_world=R_HEADSET_TO_WORLD,
-        visualize_placo=True,
+        visualize_placo=False,
         scale_factor=1.0,
         dt=0.01,
         mj_qpos_init=None,
@@ -143,9 +143,68 @@ class MujocoTeleopController(BaseTeleopController):
 
         return ee_xyz, ee_quat
 
+    def get_joint_positions(self):
+        """Get current joint positions from MuJoCo simulation.
+
+        Returns:
+            Dictionary mapping joint names to their positions in radians
+        """
+        joint_positions = {}
+
+        for joint_name in self.placo_robot.joint_names():
+            joint_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id != -1:
+                qpos_addr = self.mj_model.jnt_qposadr[joint_id]
+                joint_positions[joint_name] = self.mj_data.qpos[qpos_addr]
+
+        return joint_positions
+
+    def update3DJoint(self, joint_values):
+        """Directly update joint positions in the 3D scene.
+
+        Args:
+            joint_values: Dictionary mapping joint names to angles in radians
+                         e.g., {"left_shoulder_pan_joint": 0.5, ...}
+
+        This method bypasses IK and directly sets joint positions in MuJoCo qpos.
+        No caching - the provided values become the current state.
+        """
+        for joint_name, angle_rad in joint_values.items():
+            joint_id = mujoco.mj_name2id(self.mj_model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
+            if joint_id != -1:
+                qpos_addr = self.mj_model.jnt_qposadr[joint_id]
+                self.mj_data.qpos[qpos_addr] = angle_rad
+
+        # Update Placo state to match MuJoCo state
+        self._update_robot_state()
+
+    def step_once(self, viewer, skip_ik=False):
+        """Execute one simulation step.
+
+        Args:
+            viewer: MuJoCo viewer instance for rendering
+            skip_ik: If True, skip IK solving (robot holds position)
+                    but still update target markers from VR
+        """
+        self._update_robot_state()
+
+        # Always update IK targets from VR (so mocap markers follow controllers)
+        self._update_ik_targets()
+
+        # Only solve IK when tracking is ON
+        if not skip_ik:
+            self._solve_ik()
+
+        self._update_gripper_target()
+        self._update_mocap_target()  # Now has updated targets even when skip_ik=True
+        self._send_command()
+
+        # Step simulation and update viewer
+        mujoco.mj_step(self.mj_model, self.mj_data)
+        viewer.sync()
+
     def run(self):
         with mj_viewer.launch_passive(self.mj_model, self.mj_data) as viewer:
-            print("Starting Mujoco teleoperation controller run loop...")
             # Set up viewer camera
             viewer.cam.azimuth = 0
             viewer.cam.elevation = -50
@@ -154,16 +213,7 @@ class MujocoTeleopController(BaseTeleopController):
 
             while not self._stop_event.is_set():
                 try:
-
-                    self._update_robot_state()
-                    self._update_ik()
-                    self._update_gripper_target()
-                    self._update_mocap_target()
-                    self._send_command()
-
-                    # Step simulation and update viewer
-                    mujoco.mj_step(self.mj_model, self.mj_data)
-                    viewer.sync()
+                    self.step_once(viewer, skip_ik=False)
                 except KeyboardInterrupt:
                     print("\nTeleoperation stopped.")
                     self._stop_event.set()

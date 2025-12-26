@@ -12,10 +12,6 @@ from xrobotoolkit_teleop.hardware.dynamixel_head_controller import (
 def main(
     reset: bool = False,
     visualize_placo: bool = False,
-    enable_head: bool = False,
-    enable_gripper: bool = False,
-    enable_left_arm: bool = True,
-    enable_right_arm: bool = False,
 ):
     """
     Run head and dual arm teleoperation control.
@@ -23,24 +19,10 @@ def main(
     Args:
         reset: Run the reset procedure for the dual arm controller.
         visualize_placo: Visualize Placo in the arm controller.
-        enable_head: Enable the Dynamixel head controller.
-        enable_gripper: Enable the Robotiq gripper.
-        enable_left_arm: Enable the left UR5e arm.
-        enable_right_arm: Enable the right UR5e arm.
     """
     xr_client = XrClient()
-
-    head_controller = None
-    if enable_head:
-        head_controller = DynamixelHeadController(xr_client)
-
-    arm_controller = DualArmURController(
-        xr_client,
-        visualize_placo=visualize_placo,
-        enable_gripper=enable_gripper,
-        enable_left_arm=enable_left_arm,
-        enable_right_arm=enable_right_arm,
-    )
+    head_controller = DynamixelHeadController(xr_client)
+    arm_controller = DualArmURController(xr_client, visualize_placo=visualize_placo)
 
     if reset:
         print("Reset flag detected. Running arm controller reset procedure...")
@@ -54,14 +36,10 @@ def main(
         arm_controller.calc_target_joint_position()
 
         stop_signal = threading.Event()
-
-        if head_controller:
-            head_thread = threading.Thread(
-                target=head_controller.run_thread,
-                args=(stop_signal,),
-            )
-            head_thread.start()
-
+        head_thread = threading.Thread(
+            target=head_controller.run_thread,
+            args=(stop_signal,),
+        )
         left_arm_thread = threading.Thread(
             target=arm_controller.run_left_controller_thread,
             args=(stop_signal,),
@@ -76,10 +54,9 @@ def main(
         )
 
         # Start the threads
-        if enable_left_arm:
-            left_arm_thread.start()
-        if enable_right_arm:
-            right_arm_thread.start()
+        head_thread.start()
+        left_arm_thread.start()
+        right_arm_thread.start()
         ik_thread.start()
 
         while not stop_signal.is_set():
@@ -89,18 +66,12 @@ def main(
                 print("KeyboardInterrupt detected. Exiting...")
                 stop_signal.set()  # Trigger the stop signal for all threads
 
-        if head_controller:
-            head_thread.join()
-
-        if enable_left_arm:
-            left_arm_thread.join()
-        if enable_right_arm:
-            right_arm_thread.join()
+        head_thread.join()
+        left_arm_thread.join()
+        right_arm_thread.join()
         ik_thread.join()
 
-    if head_controller:
-        head_controller.close()
-
+    head_controller.close()
     arm_controller.close()
     print("All controllers have been stopped and disconnected.")
 

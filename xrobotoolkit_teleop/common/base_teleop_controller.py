@@ -45,6 +45,7 @@ class BaseTeleopController(abc.ABC):
         self.q_init = q_init
         self.dt = dt
         self.xr_client = XrClient()
+        self.xr_rot_offset_deg = np.array([45.0, 0.0, 0.0])
 
         self.enable_log_data = enable_log_data
         self.log_dir = log_dir
@@ -81,12 +82,8 @@ class BaseTeleopController(abc.ABC):
 
     def _process_xr_pose(self, xr_pose, src_name):
         """Process the current XR controller pose."""
-        # Get headset pose to calculate hand position relative to headset
-        headset_pose = self.xr_client.get_pose_by_name("headset")
-        headset_xyz = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
-
         # Get position and orientation
-        hand_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
+        controller_xyz = np.array([xr_pose[0], xr_pose[1], xr_pose[2]])
         controller_quat = [
             xr_pose[6],  # w
             xr_pose[3],  # x
@@ -94,13 +91,11 @@ class BaseTeleopController(abc.ABC):
             xr_pose[5],  # z
         ]
 
-        # Calculate hand position RELATIVE to headset (in headset frame)
-        controller_xyz = hand_xyz - headset_xyz
 
-        # Now transform the relative position to world frame
         controller_xyz = self.R_headset_world @ controller_xyz
 
         R_transform = np.eye(4)
+
         R_transform[:3, :3] = self.R_headset_world
         R_quat = tf.quaternion_from_matrix(R_transform)
         controller_quat = tf.quaternion_multiply(
@@ -109,8 +104,27 @@ class BaseTeleopController(abc.ABC):
         )
 
         if self.ref_controller_xyz[src_name] is None:
-            self.ref_controller_xyz[src_name] = controller_xyz
-            self.ref_controller_quat[src_name] = controller_quat
+            headset_pose = self.xr_client.get_pose_by_name("headset")
+            headset_xyz = np.array([headset_pose[0], headset_pose[1], headset_pose[2]])
+            headset_quat = [
+                headset_pose[6],  # w
+                headset_pose[3],  # x
+                headset_pose[4],  # y
+                headset_pose[5],  # z
+            ]
+            headset_xyz = self.R_headset_world @ headset_xyz
+
+
+            headset_xyz = headset_xyz - np.array([0.0, 0.0, 0.0254 * 33.0])
+            headset_quat = tf.quaternion_multiply(
+                tf.quaternion_multiply(R_quat, headset_quat),
+                tf.quaternion_conjugate(R_quat),
+            )
+            roll, pitch, yaw = tf.euler_from_quaternion(headset_quat)
+            headset_quat = tf.quaternion_from_euler(0.0, 0.0, yaw - np.deg2rad(45.0))
+
+            self.ref_controller_xyz[src_name] = headset_xyz
+            self.ref_controller_quat[src_name] = headset_quat
 
             delta_xyz = np.zeros(3)
             delta_rot = np.array([0.0, 0.0, 0.0])
@@ -118,7 +132,18 @@ class BaseTeleopController(abc.ABC):
             delta_xyz = (controller_xyz - self.ref_controller_xyz[src_name]) * self.scale_factor
             delta_rot = quat_diff_as_angle_axis(self.ref_controller_quat[src_name], controller_quat)
 
+        rot_offset = tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[0]), [1.0, 0.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[1]), [0.0, 1.0, 0.0])
+        rot_offset = rot_offset @ tf.rotation_matrix(np.deg2rad(self.xr_rot_offset_deg[2]), [0.0, 0.0, 1.0])
+        delta_rot = rot_offset[:3, :3] @ delta_rot
+
         return delta_xyz, delta_rot
+
+    def set_xr_rot_offset_deg(self, rot_offset_deg: np.ndarray) -> None:
+        """Set rotation offsets (degrees) applied to XR delta rotations."""
+        if len(rot_offset_deg) != 3:
+            raise ValueError("rot_offset_deg must be a 3-element array [x, y, z].")
+        self.xr_rot_offset_deg = np.array(rot_offset_deg, dtype=float)
 
     def _placo_setup(self):
         """Set up the placo inverse kinematics solver."""
@@ -185,47 +210,48 @@ class BaseTeleopController(abc.ABC):
 
         self.placo_robot.update_kinematics()
 
-    def _update_ik(self):
+    def _update_ik_targets(self):
         """
-        This is the core IK logic block. It reads from XR, updates Placo tasks,
-        and solves the kinematics.
+        Read XR controller poses and update IK target transforms.
+        This updates task.T_world_frame but does not solve IK.
         """
         self._update_robot_state()
         self.placo_robot.update_kinematics()
 
         for src_name, config in self.manipulator_config.items():
-            # Check if using hand tracking source
-            pose_source = config.get("pose_source", "")
-            is_hand_tracking = "hand_wrist" in pose_source
-
-            if is_hand_tracking:
-                # Hand tracking: always active (no grip button trigger)
-                self.active[src_name] = True
+            # Check if control_trigger is specified (for controller-based control)
+            # If not specified, check if pose source is available (for hand tracking)
+            if "control_trigger" in config:
+                xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
+                self.active[src_name] = xr_grip_val > 0.9
             else:
-                # Controller: use grip button trigger (original behavior)
-                # Only access control_trigger if it exists in config
-                if "control_trigger" in config:
-                    xr_grip_val = self.xr_client.get_key_value_by_name(config["control_trigger"])
-                    self.active[src_name] = xr_grip_val > 0.9
-                else:
-                    # No trigger specified, always active
+                # No trigger specified - check if pose source is available
+                # For hand tracking, this will be False until hands are visible
+                try:
+                    xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
                     self.active[src_name] = True
+                except ValueError:
+                    # Hand tracking inactive - wait for it to become active
+                    self.active[src_name] = False
+                    if self.ref_ee_xyz[src_name] is not None:
+                        # Was active before, now inactive
+                        print(f"{src_name} is deactivated (hand tracking lost).")
+                        self.ref_ee_xyz[src_name] = None
+                        self.ref_controller_xyz[src_name] = None
+                    continue
 
             if self.active[src_name]:
                 if self.ref_ee_xyz[src_name] is None:
                     print(f"{src_name} is activated.")
                     self.ref_ee_xyz[src_name], self.ref_ee_quat[src_name] = self._get_link_pose(config["link_name"])
 
-                # Get pose from XR device (controller or hand wrist)
-                xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
-
-                # Handle None case (e.g., hand tracking quality too low)
-                if xr_pose is None:
-                    # Skip this iteration - robot freezes at last pose
-                    continue
+                # Get pose (already retrieved above if no trigger, so cache it)
+                if "control_trigger" in config:
+                    xr_pose = self.xr_client.get_pose_by_name(config["pose_source"])
+                # else: xr_pose already retrieved above
 
                 delta_xyz, delta_rot = self._process_xr_pose(xr_pose, src_name)
-                
+
                 if self.effector_control_mode[src_name] == "position":
                     # Position-only control: only apply position delta
                     target_xyz = self.ref_ee_xyz[src_name] + delta_xyz
@@ -250,10 +276,20 @@ class BaseTeleopController(abc.ABC):
         # Process motion tracker data
         self._update_motion_tracker_tasks()
 
+    def _solve_ik(self):
+        """Solve IK to compute joint positions based on current task targets."""
         try:
             self.solver.solve(True)
         except RuntimeError as e:
             print(f"IK solver failed: {e}")
+
+    def _update_ik(self):
+        """
+        Update IK targets and solve IK (full IK update).
+        This is a wrapper for backward compatibility.
+        """
+        self._update_ik_targets()
+        self._solve_ik()
 
     def _update_motion_tracker_tasks(self):
         """Process motion tracker data and update corresponding Placo tasks."""

@@ -10,31 +10,31 @@ class XrClient:
         xrt.init()
         print("XRoboToolkit SDK initialized.")
 
-    def get_pose_by_name(self, name: str) -> np.ndarray | None:
+    def get_pose_by_name(self, name: str) -> np.ndarray:
         """Returns the pose of the specified device by name.
         Valid names: "left_controller", "right_controller", "headset",
                      "left_hand_wrist", "right_hand_wrist".
-        Pose is [x, y, z, qx, qy, qz, qw].
-        Returns None if hand tracking is requested but inactive.
-        """
-        # Handle hand tracking sources
-        if name == "left_hand_wrist":
-            hand_state = self.get_hand_tracking_state("left")
-            return hand_state[1] if hand_state is not None else None
-        elif name == "right_hand_wrist":
-            hand_state = self.get_hand_tracking_state("right")
-            return hand_state[1] if hand_state is not None else None
-        # Existing controller logic
-        elif name == "left_controller":
+        Pose is [x, y, z, qx, qy, qz, qw]."""
+        if name == "left_controller":
             return xrt.get_left_controller_pose()
         elif name == "right_controller":
             return xrt.get_right_controller_pose()
         elif name == "headset":
             return xrt.get_headset_pose()
+        elif name == "left_hand_wrist":
+            hand_state = self.get_hand_tracking_state("left")
+            if hand_state is None:
+                raise ValueError("Left hand tracking inactive (low quality). Cannot get wrist pose.")
+            return hand_state[1]  # Index 1 = Wrist joint
+        elif name == "right_hand_wrist":
+            hand_state = self.get_hand_tracking_state("right")
+            if hand_state is None:
+                raise ValueError("Right hand tracking inactive (low quality). Cannot get wrist pose.")
+            return hand_state[1]  # Index 1 = Wrist joint
         else:
             raise ValueError(
-                f"Invalid name: {name}. Valid names are: 'left_controller', 'right_controller', "
-                f"'headset', 'left_hand_wrist', 'right_hand_wrist'."
+                f"Invalid name: {name}. Valid names are: 'left_controller', "
+                "'right_controller', 'headset', 'left_hand_wrist', 'right_hand_wrist'."
             )
 
     def get_key_value_by_name(self, name: str) -> float:
@@ -102,29 +102,6 @@ class XrClient:
             return xrt.get_right_hand_tracking_state()
         else:
             raise ValueError(f"Invalid hand: {hand}. Valid hands are: 'left', 'right'.")
-
-    def get_full_hand_state(self, hand: str) -> dict | None:
-        """Returns complete hand tracking data for logging.
-
-        Args:
-            hand: "left" or "right"
-
-        Returns:
-            Dictionary with:
-                - 'joints': (27, 7) numpy array of joint poses
-                - 'timestamp_ns': int timestamp in nanoseconds
-                - 'is_active': bool indicating if tracking is active
-            Returns None if hand tracking is inactive.
-        """
-        hand_state = self.get_hand_tracking_state(hand)
-        if hand_state is None:
-            return None
-
-        return {
-            'joints': hand_state,
-            'timestamp_ns': self.get_timestamp_ns(),
-            'is_active': True
-        }
 
     def get_joystick_state(self, controller: str) -> list[float]:
         """Returns the joystick state for the specified controller.
