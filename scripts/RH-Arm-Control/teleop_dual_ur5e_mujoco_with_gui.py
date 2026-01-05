@@ -34,7 +34,7 @@ class DualUR5eToggleApp(QMainWindow):
 
         # Set window properties
         self.setWindowTitle("Dual UR5e Teleoperation")
-        self.setMinimumSize(1500, 1000)
+        self.setMinimumSize(1500, 1800)
 
         # Setup viewer camera (do this once)
         self.viewer.cam.azimuth = 0
@@ -106,7 +106,7 @@ def main(
         },
         "left_hand": {
             "link_name": "left_tool0",
-            "pose_source": "left_hand_wrist",
+            "pose_source": "right_hand_wrist",
             # "control_trigger": "left_grip",
             "vis_target": "left_target",
         },

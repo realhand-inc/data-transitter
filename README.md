@@ -701,8 +701,7 @@ source venv/bin/activate          # or: conda activate xr-robotics
 python scripts/RH/adb_control_gui_copy.py
 
 # Run Head Rotation Sender (Main Demo)
-python scripts/RH/test_head_rotation_sender.py
-
+python /home/richard/data-transitter/scripts/RH-Arm-Control/teleop_dual_ur5e_mujoco_with_gui.py
 # Run MuJoCo demo
 python scripts/simulation/teleop_dual_ur5e_mujoco.py
 

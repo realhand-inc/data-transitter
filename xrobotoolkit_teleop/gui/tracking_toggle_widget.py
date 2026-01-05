@@ -52,7 +52,7 @@ class TrackingToggleWidget(QWidget):
 
     # Slider scale factor (1 radian = 100 slider units for precision)
     SLIDER_SCALE = 100
-    DEFAULT_SHOULDER_PAN_OFFSET_DEG = -90.0
+    DEFAULT_SHOULDER_PAN_OFFSET_DEG = 180.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
